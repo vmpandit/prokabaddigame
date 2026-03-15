@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
     <title>Pro Kabaddi Championship</title>
 
     <!-- ============================================================
@@ -75,7 +75,7 @@
 
     <div id="hud-overlay">
         <div class="hud-panel">
-            <div class="label">Raider</div>
+            <div class="label">Your Team</div>
             <div class="value score-raider" id="hud-raider-score">0</div>
         </div>
         <div class="hud-panel" id="hud-center">
@@ -161,6 +161,68 @@
     // ── Player Role (Slice 4) ──
     const PLAYER_ROLE = { RAIDER: 'raider', DEFENDER: 'defender' };
     window.PLAYER_ROLE = PLAYER_ROLE;
+
+    // ════════════════════════════════════════════════════
+    // SLICE 5 — New Feature Constants
+    // ════════════════════════════════════════════════════
+
+    // Combo/Streak system
+    const COMBO_CONFIG = {
+        TIMEOUT: 6000,               // ms before combo resets
+        TIERS: [
+            { min: 2, mult: 1.3, color: 0xf0c040, label: 'NICE!' },
+            { min: 4, mult: 1.6, color: 0xff8830, label: 'GREAT!' },
+            { min: 6, mult: 2.0, color: 0xff4422, label: 'AMAZING!' },
+            { min: 9, mult: 3.0, color: 0xff22ff, label: 'UNSTOPPABLE!' },
+        ],
+        ULT_BONUS_PER_COMBO: 0.1,   // +10% ult gain per combo level
+    };
+    window.COMBO_CONFIG = COMBO_CONFIG;
+
+    // Difficulty scaling
+    const DIFFICULTY_CONFIG = {
+        easy:   { speedMult: 0.7, reactionDelay: 500, tackleAccuracy: 0.6, aggroMult: 0.5, formationSwapTime: 20000, label: 'EASY' },
+        normal: { speedMult: 1.0, reactionDelay: 300, tackleAccuracy: 0.8, aggroMult: 0.7, formationSwapTime: 12000, label: 'NORMAL' },
+        hard:   { speedMult: 1.2, reactionDelay: 150, tackleAccuracy: 0.92, aggroMult: 0.85, formationSwapTime: 6000, label: 'HARD' },
+        extreme:{ speedMult: 1.4, reactionDelay: 60,  tackleAccuracy: 0.98, aggroMult: 0.95, formationSwapTime: 3000, label: 'EXTREME' },
+    };
+    window.DIFFICULTY_CONFIG = DIFFICULTY_CONFIG;
+
+    // Defender formations
+    const FORMATION = {
+        BOX: 'box',
+        CHAIN: 'chain',
+        CORNER: 'corner',
+        BONUS_LINE: 'bonusLine',
+    };
+    window.FORMATION = FORMATION;
+
+    const FORMATION_POSITIONS = {
+        box: (cx,cy) => [
+            { x: cx+160, y: cy-100, role: 'corner' },
+            { x: cx+220, y: cy+20,  role: 'corner' },
+            { x: cx+140, y: cy+110, role: 'cover' },
+        ],
+        chain: (cx,cy) => [
+            { x: cx+150, y: cy-30,  role: 'chain' },
+            { x: cx+150, y: cy+30,  role: 'chain' },
+            { x: cx+250, y: cy,     role: 'cover' },
+        ],
+        corner: (cx,cy) => [
+            { x: cx+120, y: cy-80,  role: 'aggressor' },
+            { x: cx+120, y: cy+80,  role: 'aggressor' },
+            { x: cx+260, y: cy,     role: 'sweeper' },
+        ],
+        bonusLine: (cx,cy) => {
+            const bo = GAME_CONFIG.COURT.BAULK_OFFSET + 80;
+            return [
+                { x: cx+bo, y: cy-80, role: 'wall' },
+                { x: cx+bo, y: cy,    role: 'wall' },
+                { x: cx+bo, y: cy+80, role: 'wall' },
+            ];
+        },
+    };
+    window.FORMATION_POSITIONS = FORMATION_POSITIONS;
     </script>
 
     <!-- ================================================================
@@ -578,10 +640,10 @@
 
                 // Draw arc wedge as filled triangle fan
                 const steps = 8;
+                const iso = GAME_CONFIG.ISO_Y_SCALE;
                 for (let i = 0; i < steps; i++) {
                     const a0 = angle - spread + (spread * 2 / steps) * i;
                     const a1 = angle - spread + (spread * 2 / steps) * (i + 1);
-                    const iso = GAME_CONFIG.ISO_Y_SCALE;
 
                     arc.fillStyle(color, alpha * 0.3);
                     arc.fillTriangle(
@@ -873,30 +935,37 @@
             this.bannerSub = document.getElementById('banner-sub');
         }
 
-        /** Determine role for this turn */
+        /** Odd turns = player raids, even turns = player defends */
         computeRole() {
             this.playerRole = (this.currentTurn % 2 === 1) ? PLAYER_ROLE.RAIDER : PLAYER_ROLE.DEFENDER;
         }
 
         startPreRaid() {
             this.phase = GAME_PHASE.PRE_RAID;
-            this.phaseTimer = GAME_CONFIG.PHASE_PRE_RAID_TIME;
             this.cantTimeRemaining = this.cantTimeMax;
             this.computeRole();
 
             const isRaider = this.playerRole === PLAYER_ROLE.RAIDER;
-            this.bannerTitle.textContent = `RAID ${this.currentTurn}`;
-            this.bannerSub.textContent = isRaider
-                ? 'You are the RAIDER — dash in, tag, survive!'
-                : 'You are a DEFENDER — surround and tackle!';
-            this.bannerEl.classList.add('show');
+
+            if (isRaider) {
+                // Raider turn: standard countdown then go
+                this.phaseTimer = GAME_CONFIG.PHASE_PRE_RAID_TIME;
+                this.bannerTitle.textContent = `RAID ${this.currentTurn}`;
+                this.bannerSub.textContent = 'You are the RAIDER — dash in, tag defenders, get back safe!';
+                this.bannerEl.classList.add('show');
+            } else {
+                // Defender turn: show defender pick screen, pause pre-raid timer
+                this.phaseTimer = 999999; // paused until player picks
+                this.bannerEl.classList.remove('show');
+                this.scene._showDefenderPick();
+            }
 
             // Update role badge
             this.roleEl.textContent = isRaider ? 'YOU: RAIDER' : 'YOU: DEFENDER';
             this.roleEl.className = isRaider ? 'raider' : 'defender';
             this.turnEl.textContent = `RAID ${this.currentTurn} / ${this.maxTurns}`;
 
-            // Environment swap (Slice 4): courtyard on even turns
+            // Environment swap for variety
             this.scene.setEnvironment(isRaider ? 'stadium' : 'courtyard');
 
             this.updateTimerDisplay();
@@ -945,8 +1014,8 @@
         endMatch() {
             this.phase = GAME_PHASE.MATCH_OVER;
             const rs=this.scene.raiderScore, ds=this.scene.defenderScore;
-            this.bannerTitle.textContent = rs>ds?'RAIDER WINS!':ds>rs?'DEFENDERS WIN!':'DRAW!';
-            this.bannerSub.textContent = `Final: Raider ${rs} — ${ds} Defenders  |  Tap to restart`;
+            this.bannerTitle.textContent = rs>ds?'YOU WIN!':ds>rs?'DEFENDERS WIN!':'DRAW!';
+            this.bannerSub.textContent = `Final: You ${rs} — ${ds} Defenders  |  Tap to continue`;
             this.bannerEl.classList.add('show');
         }
 
@@ -1432,6 +1501,126 @@
                 dr = e; on = !on;
             }
         }
+
+        /**
+         * Draw spectator silhouettes along court edges.
+         * Creates a lively arena atmosphere with bobbing crowd shapes.
+         */
+        static drawSpectators(gfx, env = 'stadium', time = 0) {
+            const { COURT } = GAME_CONFIG;
+            const cx = COURT.CENTER_X, cy = COURT.CENTER_Y;
+            const hw = COURT.WIDTH / 2, hh = COURT.HEIGHT / 2;
+            const isCY = env === 'courtyard';
+            const crowdColor = isCY ? 0x1a1208 : 0x0a1520;
+            const highlightColor = isCY ? 0x3a2a14 : 0x142a3a;
+
+            gfx.clear();
+
+            // Top bleacher row
+            const topY = cy - hh - 65;
+            for (let i = 0; i < 28; i++) {
+                const sx = cx - hw + 20 + i * (COURT.WIDTH - 40) / 27;
+                const bob = Math.sin(time * 2.5 + i * 0.7) * 2;
+                const h = 16 + (i % 3) * 3;
+                // Body
+                gfx.fillStyle(crowdColor, 0.6 + Math.sin(time + i) * 0.1);
+                gfx.fillRoundedRect(sx - 5, topY - h + bob, 10, h, 3);
+                // Head
+                gfx.fillStyle(crowdColor, 0.7);
+                gfx.fillCircle(sx, topY - h - 4 + bob, 5);
+                // Occasional team color highlight
+                if (i % 5 === 0) {
+                    const tc = i < 14 ? GAME_CONFIG.COLORS.PLAYER_BODY : GAME_CONFIG.COLORS.DEFENDER_BODY;
+                    gfx.fillStyle(tc, 0.2);
+                    gfx.fillRoundedRect(sx - 4, topY - h + 2 + bob, 8, h - 4, 2);
+                }
+            }
+
+            // Bottom bleacher row
+            const botY = cy + hh + 55;
+            for (let i = 0; i < 28; i++) {
+                const sx = cx - hw + 20 + i * (COURT.WIDTH - 40) / 27;
+                const bob = Math.sin(time * 2.2 + i * 0.8 + 1) * 2;
+                const h = 14 + (i % 4) * 2;
+                gfx.fillStyle(crowdColor, 0.5 + Math.sin(time * 1.3 + i) * 0.1);
+                gfx.fillRoundedRect(sx - 5, botY + bob, 10, h, 3);
+                gfx.fillStyle(crowdColor, 0.65);
+                gfx.fillCircle(sx, botY - 4 + bob, 4.5);
+                if (i % 6 === 2) {
+                    const tc = i < 14 ? GAME_CONFIG.COLORS.PLAYER_BODY : GAME_CONFIG.COLORS.DEFENDER_BODY;
+                    gfx.fillStyle(tc, 0.15);
+                    gfx.fillRoundedRect(sx - 3, botY + 2 + bob, 6, h - 3, 2);
+                }
+            }
+
+            // Side spectators (smaller groups)
+            const leftX = cx - hw - 55;
+            const rightX = cx + hw + 55;
+            for (let i = 0; i < 12; i++) {
+                const sy = cy - hh + 30 + i * (COURT.HEIGHT - 60) / 11;
+                const bobL = Math.sin(time * 2 + i * 0.9) * 1.5;
+                const bobR = Math.sin(time * 2.3 + i * 1.1 + 2) * 1.5;
+
+                // Left side
+                gfx.fillStyle(crowdColor, 0.45);
+                gfx.fillRoundedRect(leftX - 4, sy - 6 + bobL, 8, 12, 3);
+                gfx.fillCircle(leftX, sy - 9 + bobL, 4);
+
+                // Right side
+                gfx.fillStyle(crowdColor, 0.45);
+                gfx.fillRoundedRect(rightX - 4, sy - 6 + bobR, 8, 12, 3);
+                gfx.fillCircle(rightX, sy - 9 + bobR, 4);
+            }
+        }
+
+        /**
+         * Draw zone labels and team marks on the court.
+         * Called once per environment swap, drawn to a separate graphics layer.
+         */
+        static drawZoneLabels(scene, env = 'stadium') {
+            const { COURT } = GAME_CONFIG;
+            const cx = COURT.CENTER_X, cy = COURT.CENTER_Y;
+            const isCY = env === 'courtyard';
+
+            // Clean up previous labels if any
+            if (scene._zoneLabels) {
+                scene._zoneLabels.forEach(l => l.destroy());
+            }
+            scene._zoneLabels = [];
+
+            const labelColor = isCY ? 'rgba(200,144,64,0.12)' : 'rgba(240,192,64,0.12)';
+            const fontBase = {
+                fontFamily: '"Segoe UI", system-ui, sans-serif',
+                fontStyle: 'bold',
+                align: 'center'
+            };
+
+            // Zone labels
+            const rLabel = scene.add.text(cx - COURT.BAULK_OFFSET / 2 - 40, cy, 'RAIDER\nTERRITORY', {
+                ...fontBase, fontSize: '14px', color: 'rgba(232,80,48,0.12)', letterSpacing: '3px', lineSpacing: 4
+            }).setOrigin(0.5).setDepth(1);
+
+            const dLabel = scene.add.text(cx + COURT.BAULK_OFFSET / 2 + 40, cy, 'DEFENDER\nTERRITORY', {
+                ...fontBase, fontSize: '14px', color: 'rgba(48,144,232,0.12)', letterSpacing: '3px', lineSpacing: 4
+            }).setOrigin(0.5).setDepth(1);
+
+            // Baulk line labels
+            const baulkLabelStyle = { ...fontBase, fontSize: '8px', color: labelColor, letterSpacing: '2px' };
+            const bL = scene.add.text(cx - COURT.BAULK_OFFSET, cy - COURT.HEIGHT / 2 + 12, 'BAULK', baulkLabelStyle).setOrigin(0.5, 0).setDepth(1);
+            const bR = scene.add.text(cx + COURT.BAULK_OFFSET, cy - COURT.HEIGHT / 2 + 12, 'BAULK', baulkLabelStyle).setOrigin(0.5, 0).setDepth(1);
+
+            // Bonus line labels
+            const bo = COURT.BAULK_OFFSET + 80;
+            const bonusStyle = { ...fontBase, fontSize: '7px', color: isCY ? 'rgba(68,102,136,0.15)' : 'rgba(68,170,255,0.15)', letterSpacing: '1px' };
+            const boL = scene.add.text(cx - bo, cy - COURT.HEIGHT / 2 + 12, 'BONUS', bonusStyle).setOrigin(0.5, 0).setDepth(1);
+            const boR = scene.add.text(cx + bo, cy - COURT.HEIGHT / 2 + 12, 'BONUS', bonusStyle).setOrigin(0.5, 0).setDepth(1);
+
+            // Center mark — "PKC" logo
+            const logoStyle = { ...fontBase, fontSize: '22px', color: labelColor, letterSpacing: '8px' };
+            const logo = scene.add.text(cx, cy, 'PKC', logoStyle).setOrigin(0.5).setDepth(1).setAlpha(0.6);
+
+            scene._zoneLabels = [rLabel, dLabel, bL, bR, boL, boR, logo];
+        }
     }
     window.PremiumCourtRenderer = PremiumCourtRenderer;
     </script>
@@ -1444,38 +1633,777 @@
     <script>
     class AnimationSystem {
         constructor() {
-            this.entities = new Map(); // id → { phase, state, facingX }
+            this.entities = new Map(); // id → { phase, state, facingX, dirty, drawPhase }
+            // Phase 5: Quality tier detection
+            this.quality = AnimationSystem.detectQuality();
+            this.drawInterval = this.quality === 'low' ? 0.06 : // ~16fps character redraws
+                                this.quality === 'medium' ? 0.033 : // ~30fps
+                                0; // every frame
+        }
+
+        static detectQuality() {
+            // Check for mobile / low-end indicators
+            const isMobile = /Android|iPhone|iPad/i.test(navigator.userAgent);
+            const cores = navigator.hardwareConcurrency || 2;
+            if (isMobile && cores <= 4) return 'low';
+            if (isMobile || cores <= 4) return 'medium';
+            return 'high';
         }
 
         register(id) {
-            this.entities.set(id, { phase: Math.random() * Math.PI * 2, state: 'idle', facingX: 0 });
+            this.entities.set(id, {
+                phase: Math.random() * Math.PI * 2,
+                state: 'idle', facingX: 0,
+                dirty: true,         // needs redraw
+                drawTimer: 0,        // time since last draw
+                lastState: '',       // for detecting state changes
+                lastFacingSnap: 0,   // quantized facing for dirty check
+            });
         }
 
         update(id, dt, state, moveVecX = 0) {
             const e = this.entities.get(id);
             if (!e) return;
+
+            const prevState = e.state;
             e.state = state;
+
             // Update facing smoothly
             if (Math.abs(moveVecX) > 0.1) {
                 e.facingX += (Math.sign(moveVecX) - e.facingX) * Math.min(1, dt * 8);
             }
+
             // Advance animation phase
             const speedMult = state === 'dashing' || state === 'tackling' ? 2.5 :
                               state === 'moving' ? 1.5 : 0.5;
             e.phase += dt * speedMult;
+
+            // Phase 5: Dirty detection — only redraw when visually meaningful change
+            e.drawTimer += dt;
+            const facingSnap = Math.round(e.facingX * 4) / 4; // quantize to 0.25 steps
+
+            if (state !== prevState ||                    // state changed
+                facingSnap !== e.lastFacingSnap ||        // facing changed noticeably
+                state !== 'idle' ||                        // always redraw during action
+                e.drawTimer >= this.drawInterval + 0.1) {  // idle refresh every ~100ms
+                e.dirty = true;
+                e.lastFacingSnap = facingSnap;
+                e.lastState = state;
+            }
         }
 
         getParams(id) {
             const e = this.entities.get(id);
-            if (!e) return { animPhase: 0, state: 'idle', facingX: 0 };
-            return { animPhase: e.phase, state: e.state, facingX: e.facingX };
+            if (!e) return { animPhase: 0, state: 'idle', facingX: 0, dirty: true };
+            return { animPhase: e.phase, state: e.state, facingX: e.facingX, dirty: e.dirty };
+        }
+
+        markDrawn(id) {
+            const e = this.entities.get(id);
+            if (e) { e.dirty = false; e.drawTimer = 0; }
         }
     }
     window.AnimationSystem = AnimationSystem;
     </script>
 
     <!-- ================================================================
-         AGENT PHYSICS — MainGameScene (Slice 4 — Side-Switching)
+         SLICE 5 — ComboSystem
+         Tracks consecutive successful actions, applies multiplier.
+         ================================================================ -->
+    <script>
+    class ComboSystem {
+        constructor(scene) {
+            this.scene = scene;
+            this.count = 0;
+            this.timer = 0;
+            this.multiplier = 1.0;
+            this.tier = -1;
+            this.comboGfx = null;   // floating text graphics
+        }
+
+        /** Called when player scores a successful action (tag, dodge tackle, etc.) */
+        addHit() {
+            this.count++;
+            this.timer = COMBO_CONFIG.TIMEOUT;
+            this._recalcTier();
+
+            // Floating combo text
+            if (this.tier >= 0) {
+                const t = COMBO_CONFIG.TIERS[this.tier];
+                this._showComboText(t.label, t.color);
+
+                // VFX escalation
+                if (this.tier >= 1) this.scene.vfx.triggerShake(0.004 + this.tier * 0.003, 100);
+                if (this.tier >= 2) window.HapticsManager.heavy();
+                else window.HapticsManager.light();
+
+                // Ultimate bonus
+                const ultBonus = 1 + this.count * COMBO_CONFIG.ULT_BONUS_PER_COMBO;
+                this.scene.ultimateSystem.addMeter(GAME_CONFIG.ULT_GAIN_TAG * (ultBonus - 1));
+            }
+        }
+
+        /** Called when combo should break (tackled, timeout, etc.) */
+        reset() {
+            if (this.count >= 2) this._showComboText('COMBO OVER', 0x888888);
+            this.count = 0;
+            this.timer = 0;
+            this.multiplier = 1.0;
+            this.tier = -1;
+        }
+
+        update(dt) {
+            if (this.count > 0) {
+                this.timer -= dt * 1000;
+                if (this.timer <= 0) this.reset();
+            }
+        }
+
+        getMultiplier() { return this.multiplier; }
+
+        _recalcTier() {
+            this.tier = -1;
+            this.multiplier = 1.0;
+            for (let i = COMBO_CONFIG.TIERS.length - 1; i >= 0; i--) {
+                if (this.count >= COMBO_CONFIG.TIERS[i].min) {
+                    this.tier = i;
+                    this.multiplier = COMBO_CONFIG.TIERS[i].mult;
+                    break;
+                }
+            }
+        }
+
+        _showComboText(text, color) {
+            // Destroy previous
+            if (this.comboGfx) this.comboGfx.destroy();
+
+            const px = this.scene.player.x;
+            const py = this.scene.player.y - 60;
+            const label = this.count > 1 ? `${this.count}x ${text}` : text;
+
+            this.comboGfx = this.scene.add.text(px, py, label, {
+                fontFamily: '"Segoe UI", system-ui, sans-serif',
+                fontSize: Math.min(14 + this.tier * 4, 26) + 'px',
+                fontStyle: 'bold',
+                color: '#' + color.toString(16).padStart(6, '0'),
+                stroke: '#000000',
+                strokeThickness: 3,
+            }).setOrigin(0.5).setDepth(200);
+
+            this.scene.tweens.add({
+                targets: this.comboGfx,
+                y: py - 40,
+                alpha: 0,
+                duration: 1200,
+                ease: 'Quad.easeOut',
+                onComplete: () => { if (this.comboGfx) this.comboGfx.destroy(); this.comboGfx = null; }
+            });
+        }
+    }
+    window.ComboSystem = ComboSystem;
+    </script>
+
+    <!-- ================================================================
+         SLICE 5 — MenuScene
+         Title screen with difficulty selection, then launches game.
+         ================================================================ -->
+    <script>
+    class MenuScene extends Phaser.Scene {
+        constructor() {
+            super({ key: 'MenuScene' });
+        }
+
+        create() {
+            const W = GAME_CONFIG.DESIGN_WIDTH;
+            const H = GAME_CONFIG.DESIGN_HEIGHT;
+
+            // Background
+            const bg = this.add.graphics();
+            bg.fillStyle(0x0a0a12, 1);
+            bg.fillRect(0, 0, W, H);
+            // Ambient court glow
+            bg.fillStyle(0x1a3a2a, 0.15);
+            bg.fillEllipse(W / 2, H / 2 + 40, 800, 400);
+
+            // Title
+            this.add.text(W / 2, 120, 'PRO KABADDI', {
+                fontFamily: '"Segoe UI", system-ui, sans-serif',
+                fontSize: '52px', fontStyle: 'bold',
+                color: '#f0c040', letterSpacing: '8px',
+            }).setOrigin(0.5);
+
+            this.add.text(W / 2, 170, 'CHAMPIONSHIP', {
+                fontFamily: '"Segoe UI", system-ui, sans-serif',
+                fontSize: '18px', fontStyle: 'bold',
+                color: 'rgba(240,192,64,0.5)', letterSpacing: '12px',
+            }).setOrigin(0.5);
+
+            // Decorative court lines
+            const decor = this.add.graphics();
+            decor.lineStyle(1.5, 0xf0c040, 0.15);
+            decor.strokeRoundedRect(W / 2 - 300, 230, 600, 320, 8);
+            decor.lineStyle(1, 0xf0c040, 0.08);
+            decor.lineBetween(W / 2, 230, W / 2, 550);
+
+            // Difficulty buttons
+            const difficulties = ['easy', 'normal', 'hard', 'extreme'];
+            const btnColors = [0x44aa44, 0xf0c040, 0xff6644, 0xff22ff];
+            const btnY = 300;
+
+            this.add.text(W / 2, 250, 'SELECT DIFFICULTY', {
+                fontFamily: '"Segoe UI", system-ui, sans-serif',
+                fontSize: '13px', fontStyle: 'bold',
+                color: 'rgba(255,255,255,0.4)', letterSpacing: '4px',
+            }).setOrigin(0.5);
+
+            difficulties.forEach((diff, i) => {
+                const bx = W / 2 - 225 + i * 150;
+                const by = btnY;
+                const conf = DIFFICULTY_CONFIG[diff];
+
+                // Button background
+                const btn = this.add.graphics();
+                btn.fillStyle(btnColors[i], 0.12);
+                btn.fillRoundedRect(bx - 55, by - 25, 110, 50, 8);
+                btn.lineStyle(1.5, btnColors[i], 0.4);
+                btn.strokeRoundedRect(bx - 55, by - 25, 110, 50, 8);
+
+                // Button label
+                this.add.text(bx, by, conf.label, {
+                    fontFamily: '"Segoe UI", system-ui, sans-serif',
+                    fontSize: '15px', fontStyle: 'bold',
+                    color: '#' + btnColors[i].toString(16).padStart(6, '0'),
+                    letterSpacing: '2px',
+                }).setOrigin(0.5);
+
+                // Invisible hit area
+                const hitArea = this.add.rectangle(bx, by, 110, 50).setInteractive({ useHandCursor: true }).setAlpha(0.001);
+                hitArea.on('pointerover', () => {
+                    btn.clear();
+                    btn.fillStyle(btnColors[i], 0.25);
+                    btn.fillRoundedRect(bx - 55, by - 25, 110, 50, 8);
+                    btn.lineStyle(2, btnColors[i], 0.7);
+                    btn.strokeRoundedRect(bx - 55, by - 25, 110, 50, 8);
+                });
+                hitArea.on('pointerout', () => {
+                    btn.clear();
+                    btn.fillStyle(btnColors[i], 0.12);
+                    btn.fillRoundedRect(bx - 55, by - 25, 110, 50, 8);
+                    btn.lineStyle(1.5, btnColors[i], 0.4);
+                    btn.strokeRoundedRect(bx - 55, by - 25, 110, 50, 8);
+                });
+                hitArea.on('pointerdown', () => {
+                    this.scene.start('MainGameScene', { difficulty: diff });
+                });
+            });
+
+            // Controls info
+            const isMobile = this.sys.game.device.input.touch;
+            this.add.text(W / 2, 420, isMobile
+                ? 'LEFT SIDE: Move  |  RIGHT SIDE: Aim + Release = Action'
+                : 'WASD: Move  |  Click: Action  |  Space: Action/Ult  |  E: Ultimate', {
+                fontFamily: '"Segoe UI", system-ui, sans-serif',
+                fontSize: '11px', color: 'rgba(255,255,255,0.25)', letterSpacing: '1px',
+            }).setOrigin(0.5);
+
+            // HOW TO PLAY button
+            const tutBtnX = W / 2, tutBtnY = 460;
+            const tutBtn = this.add.graphics();
+            tutBtn.fillStyle(0xf0c040, 0.1);
+            tutBtn.fillRoundedRect(tutBtnX - 90, tutBtnY - 18, 180, 36, 8);
+            tutBtn.lineStyle(1.5, 0xf0c040, 0.35);
+            tutBtn.strokeRoundedRect(tutBtnX - 90, tutBtnY - 18, 180, 36, 8);
+            this.add.text(tutBtnX, tutBtnY, 'HOW TO PLAY', {
+                fontFamily: '"Segoe UI", system-ui, sans-serif',
+                fontSize: '13px', fontStyle: 'bold',
+                color: '#f0c040', letterSpacing: '3px',
+            }).setOrigin(0.5);
+            const tutHit = this.add.rectangle(tutBtnX, tutBtnY, 180, 36).setInteractive({ useHandCursor: true }).setAlpha(0.001);
+            tutHit.on('pointerover', () => {
+                tutBtn.clear();
+                tutBtn.fillStyle(0xf0c040, 0.22);
+                tutBtn.fillRoundedRect(tutBtnX - 90, tutBtnY - 18, 180, 36, 8);
+                tutBtn.lineStyle(2, 0xf0c040, 0.6);
+                tutBtn.strokeRoundedRect(tutBtnX - 90, tutBtnY - 18, 180, 36, 8);
+            });
+            tutHit.on('pointerout', () => {
+                tutBtn.clear();
+                tutBtn.fillStyle(0xf0c040, 0.1);
+                tutBtn.fillRoundedRect(tutBtnX - 90, tutBtnY - 18, 180, 36, 8);
+                tutBtn.lineStyle(1.5, 0xf0c040, 0.35);
+                tutBtn.strokeRoundedRect(tutBtnX - 90, tutBtnY - 18, 180, 36, 8);
+            });
+            tutHit.on('pointerdown', () => {
+                this.scene.start('TutorialScene');
+            });
+
+            // Features list
+            this.add.text(W / 2, 520, [
+                'Side-switching raids  •  Defender formations  •  Combo streaks',
+                'Ultimate abilities  •  Dynamic AI  •  Procedural sound & VFX'
+            ].join('\n'), {
+                fontFamily: '"Segoe UI", system-ui, sans-serif',
+                fontSize: '10px', color: 'rgba(255,255,255,0.2)',
+                align: 'center', lineSpacing: 6,
+            }).setOrigin(0.5);
+
+            // Version
+            this.add.text(W / 2, H - 20, 'v6.0 — Slice 6', {
+                fontFamily: '"Segoe UI", system-ui, sans-serif',
+                fontSize: '9px', color: 'rgba(240,192,64,0.15)',
+            }).setOrigin(0.5);
+
+            // Hide loading overlay
+            const overlay = document.getElementById('loading-overlay');
+            if (overlay) overlay.classList.add('hidden');
+        }
+    }
+    window.MenuScene = MenuScene;
+    </script>
+
+    <!-- ================================================================
+         TUTORIAL SCENE — Interactive walkthrough (Slice 6)
+         Step-by-step guided tutorial: Move → Dash → Tag → Tackle → Ult
+         ================================================================ -->
+    <script>
+    class TutorialScene extends Phaser.Scene {
+        constructor() { super({ key: 'TutorialScene' }); }
+
+        create() {
+            const W = GAME_CONFIG.DESIGN_WIDTH, H = GAME_CONFIG.DESIGN_HEIGHT;
+            const COURT = GAME_CONFIG.COURT;
+            this.isMobile = !!this.sys.game.device.input.touch;
+
+            // ── Court background (simplified) ──
+            const courtGfx = this.add.graphics();
+            courtGfx.fillStyle(0x0a0a12, 1);
+            courtGfx.fillRect(0, 0, W, H);
+            courtGfx.fillStyle(GAME_CONFIG.COLORS.COURT_FILL, 1);
+            const cx = COURT.CENTER_X, cy = COURT.CENTER_Y;
+            const cw = COURT.WIDTH, ch = COURT.HEIGHT;
+            courtGfx.fillRoundedRect(cx - cw/2, cy - ch/2, cw, ch, 12);
+            courtGfx.lineStyle(2, GAME_CONFIG.COLORS.COURT_BORDER, 0.6);
+            courtGfx.strokeRoundedRect(cx - cw/2, cy - ch/2, cw, ch, 12);
+            courtGfx.lineStyle(1.5, GAME_CONFIG.COLORS.MIDLINE, 0.4);
+            courtGfx.lineBetween(cx, cy - ch/2, cx, cy + ch/2);
+
+            // ── Player entity ──
+            this.playerGfx = this.add.graphics().setDepth(20);
+            this.playerPos = { x: cx - 200, y: cy };
+            this._drawPlayer();
+
+            // ── Dummy defenders (3 stationary targets) ──
+            this.dummies = [];
+            const dummyPositions = [
+                { x: cx + 160, y: cy - 90 },
+                { x: cx + 220, y: cy + 30 },
+                { x: cx + 130, y: cy + 100 },
+            ];
+            dummyPositions.forEach((p, i) => {
+                const g = this.add.graphics().setDepth(15);
+                const s = this.add.graphics().setDepth(5);
+                const dummy = { x: p.x, y: p.y, gfx: g, shadow: s, tagged: false, stunTimer: 0 };
+                this._drawDummy(dummy);
+                this.dummies.push(dummy);
+            });
+
+            // ── Highlight ring (pulsing target indicator) ──
+            this.highlightGfx = this.add.graphics().setDepth(30);
+            this.highlightPhase = 0;
+            this.highlightTarget = null;
+
+            // ── Movement input ──
+            this.moveVector = { x: 0, y: 0 };
+            this.aimVector = { x: 0, y: 0 };
+            this.facingAngle = 0;
+            this.isDashing = false;
+            this.dashTimer = 0;
+            this.dashCooldown = 0;
+            this.dashDir = { x: 0, y: 0 };
+
+            // Joystick state
+            this.leftJoystickActive = false; this.leftJoystickPointerID = null;
+            this.leftJoystickOrigin = { x: 0, y: 0 };
+            this.rightJoystickActive = false; this.rightJoystickPointerID = null;
+            this.rightJoystickOrigin = { x: 0, y: 0 };
+
+            // Joystick graphics
+            this._createJoysticks();
+
+            // Keyboard
+            this.wasdKeys = this.input.keyboard.addKeys({
+                up: Phaser.Input.Keyboard.KeyCodes.W, down: Phaser.Input.Keyboard.KeyCodes.S,
+                left: Phaser.Input.Keyboard.KeyCodes.A, right: Phaser.Input.Keyboard.KeyCodes.D,
+            });
+            this.input.keyboard.on('keydown-SPACE', () => this._triggerDash());
+
+            // Touch joystick input
+            this._setupTouch();
+
+            // Mouse click for dash
+            this.input.on('pointerdown', (p) => {
+                if (!this.isMobile && !this.leftJoystickActive && !this.rightJoystickActive) {
+                    if (p.button === 0) {
+                        const w = this.cameras.main.getWorldPoint(p.x, p.y);
+                        const dx = w.x - this.playerPos.x, dy = w.y - this.playerPos.y;
+                        const m = Math.sqrt(dx*dx + dy*dy);
+                        if (m > 5) { this.aimVector.x = dx/m; this.aimVector.y = dy/m; this._triggerDash(); }
+                    }
+                }
+            });
+
+            // ── Tutorial Steps ──
+            this.steps = [
+                {
+                    title: 'WELCOME TO KABADDI',
+                    text: this.isMobile
+                        ? 'You are the RAIDER (red).\nTouch LEFT side and drag to MOVE.'
+                        : 'You are the RAIDER (red).\nUse WASD keys to MOVE around the court.',
+                    condition: () => this._playerMoved,
+                    onEnter: () => { this._playerMoved = false; this._moveAccum = 0; },
+                },
+                {
+                    title: 'MOVE TO THE MARKER',
+                    text: 'Walk to the glowing marker near the center.',
+                    condition: () => {
+                        const dx = this.playerPos.x - cx, dy = this.playerPos.y - cy;
+                        return Math.sqrt(dx*dx + dy*dy) < 60;
+                    },
+                    onEnter: () => { this.highlightTarget = { x: cx, y: cy }; },
+                },
+                {
+                    title: 'DASH ATTACK',
+                    text: this.isMobile
+                        ? 'Aim with the RIGHT joystick and release to DASH.\nDash into a blue defender to TAG them!'
+                        : 'Click on a blue defender to DASH into them.\n(Or press SPACE to dash forward.)',
+                    condition: () => this.dummies.some(d => d.tagged),
+                    onEnter: () => {
+                        this.highlightTarget = this.dummies[0];
+                        this.dummies.forEach(d => { d.tagged = false; this._drawDummy(d); });
+                    },
+                },
+                {
+                    title: 'TAG ALL DEFENDERS',
+                    text: 'Great! Now tag the remaining defenders.\nEach tag scores points for your team.',
+                    condition: () => this.dummies.every(d => d.tagged),
+                    onEnter: () => { this.highlightTarget = this.dummies.find(d => !d.tagged) || null; },
+                },
+                {
+                    title: 'RETURN TO SAFETY',
+                    text: 'After tagging, cross back to YOUR side (left)\nto score and survive the raid!',
+                    condition: () => this.playerPos.x < cx - 60,
+                    onEnter: () => { this.highlightTarget = { x: cx - 250, y: cy }; },
+                },
+                {
+                    title: 'YOU\'RE READY!',
+                    text: 'You now know the basics:\nMove, Dash, Tag, and Return.\n\nTap anywhere to start playing!',
+                    condition: () => this._finalTap,
+                    onEnter: () => {
+                        this.highlightTarget = null;
+                        this._finalTap = false;
+                        this.input.once('pointerdown', () => { this._finalTap = true; });
+                        this.input.keyboard.once('keydown', () => { this._finalTap = true; });
+                    },
+                },
+            ];
+            this.currentStep = 0;
+            this._playerMoved = false;
+            this._moveAccum = 0;
+            this._finalTap = false;
+
+            // ── UI: Instruction panel ──
+            this.instrBg = this.add.graphics().setDepth(90).setScrollFactor(0);
+            this.instrTitle = this.add.text(W/2, 38, '', {
+                fontFamily: '"Segoe UI", system-ui, sans-serif',
+                fontSize: '20px', fontStyle: 'bold', color: '#f0c040',
+                letterSpacing: 3,
+            }).setOrigin(0.5).setDepth(91).setScrollFactor(0);
+
+            this.instrText = this.add.text(W/2, 72, '', {
+                fontFamily: '"Segoe UI", system-ui, sans-serif',
+                fontSize: '13px', color: 'rgba(255,255,255,0.7)',
+                align: 'center', lineSpacing: 5,
+            }).setOrigin(0.5, 0).setDepth(91).setScrollFactor(0);
+
+            // Step counter
+            this.stepCounter = this.add.text(W - 20, H - 20, '', {
+                fontFamily: '"Segoe UI", system-ui, sans-serif',
+                fontSize: '10px', color: 'rgba(240,192,64,0.3)',
+            }).setOrigin(1, 1).setDepth(91).setScrollFactor(0);
+
+            // Skip button
+            const skipBg = this.add.graphics().setDepth(90).setScrollFactor(0);
+            skipBg.fillStyle(0xffffff, 0.06);
+            skipBg.fillRoundedRect(W - 100, 10, 80, 30, 6);
+            skipBg.lineStyle(1, 0xffffff, 0.15);
+            skipBg.strokeRoundedRect(W - 100, 10, 80, 30, 6);
+            this.add.text(W - 60, 25, 'SKIP', {
+                fontFamily: '"Segoe UI", system-ui, sans-serif',
+                fontSize: '11px', fontStyle: 'bold', color: 'rgba(255,255,255,0.4)',
+                letterSpacing: 2,
+            }).setOrigin(0.5).setDepth(91).setScrollFactor(0);
+            const skipHit = this.add.rectangle(W - 60, 25, 80, 30).setInteractive({ useHandCursor: true }).setAlpha(0.001).setDepth(92).setScrollFactor(0);
+            skipHit.on('pointerdown', () => this.scene.start('MenuScene'));
+
+            // Court bounds for clamping
+            this.courtBounds = new Phaser.Geom.Rectangle(
+                cx - cw/2 + 10, cy - ch/2 + 10, cw - 20, ch - 20
+            );
+
+            // Start first step
+            this._enterStep(0);
+
+            // Hide loading overlay
+            const overlay = document.getElementById('loading-overlay');
+            if (overlay) overlay.classList.add('hidden');
+        }
+
+        _enterStep(idx) {
+            if (idx >= this.steps.length) {
+                this.scene.start('MenuScene');
+                return;
+            }
+            this.currentStep = idx;
+            const step = this.steps[idx];
+            if (step.onEnter) step.onEnter();
+            this.instrTitle.setText(step.title);
+            this.instrText.setText(step.text);
+            this.stepCounter.setText(`Step ${idx+1} / ${this.steps.length}`);
+
+            // Redraw instruction background
+            const W = GAME_CONFIG.DESIGN_WIDTH;
+            const textH = 30 + this.instrText.height;
+            this.instrBg.clear();
+            this.instrBg.fillStyle(0x0a0a12, 0.8);
+            this.instrBg.fillRoundedRect(W/2 - 300, 8, 600, textH + 30, 10);
+            this.instrBg.lineStyle(1, 0xf0c040, 0.2);
+            this.instrBg.strokeRoundedRect(W/2 - 300, 8, 600, textH + 30, 10);
+        }
+
+        _drawPlayer() {
+            const g = this.playerGfx;
+            g.clear();
+            const x = 0, y = 0;
+            // Shadow
+            g.fillStyle(0x000000, 0.3);
+            g.fillEllipse(x, y + 18, 36, 12);
+            // Body
+            g.fillStyle(GAME_CONFIG.COLORS.PLAYER_BODY, 1);
+            g.fillRoundedRect(x - 12, y - 20, 24, 28, 6);
+            // Head
+            g.fillStyle(0xd4a574, 1);
+            g.fillCircle(x, y - 26, 10);
+            // Headband
+            g.fillStyle(0xf0c040, 1);
+            g.fillRect(x - 10, y - 30, 20, 4);
+            g.setPosition(this.playerPos.x, this.playerPos.y);
+        }
+
+        _drawDummy(d) {
+            const g = d.gfx;
+            g.clear();
+            d.shadow.clear();
+            if (d.tagged) {
+                // Tagged: dim, X marks
+                d.shadow.fillStyle(0x000000, 0.15);
+                d.shadow.fillEllipse(d.x, d.y + 18, 36, 12);
+                g.fillStyle(GAME_CONFIG.COLORS.DEFENDER_BODY, 0.25);
+                g.fillRoundedRect(d.x - 12, d.y - 20, 24, 28, 6);
+                g.fillStyle(0xd4a574, 0.3);
+                g.fillCircle(d.x, d.y - 26, 10);
+                // X indicator
+                g.lineStyle(3, 0xff4422, 0.6);
+                g.lineBetween(d.x - 8, d.y - 12, d.x + 8, d.y + 4);
+                g.lineBetween(d.x + 8, d.y - 12, d.x - 8, d.y + 4);
+            } else {
+                d.shadow.fillStyle(0x000000, 0.3);
+                d.shadow.fillEllipse(d.x, d.y + 18, 36, 12);
+                g.fillStyle(GAME_CONFIG.COLORS.DEFENDER_BODY, 1);
+                g.fillRoundedRect(d.x - 12, d.y - 20, 24, 28, 6);
+                g.fillStyle(0xd4a574, 1);
+                g.fillCircle(d.x, d.y - 26, 10);
+                g.fillStyle(0x2070c0, 1);
+                g.fillRect(d.x - 10, d.y - 30, 20, 4);
+            }
+        }
+
+        _createJoysticks() {
+            const r = GAME_CONFIG.JOYSTICK_RADIUS;
+            this.ljBase = this.add.graphics().setDepth(100).setVisible(false).setScrollFactor(0);
+            this.ljBase.lineStyle(2, 0xffffff, 0.2); this.ljBase.strokeCircle(0,0,r);
+            this.ljBase.fillStyle(0xffffff, 0.05); this.ljBase.fillCircle(0,0,r);
+            this.ljThumb = this.add.graphics().setDepth(101).setVisible(false).setScrollFactor(0);
+            this.ljThumb.fillStyle(0xffffff, 0.3); this.ljThumb.fillCircle(0,0,28);
+            this.ljThumb.lineStyle(2, 0xffffff, 0.5); this.ljThumb.strokeCircle(0,0,28);
+            this.rjBase = this.add.graphics().setDepth(100).setVisible(false).setScrollFactor(0);
+            this.rjBase.lineStyle(2, 0xff6644, 0.25); this.rjBase.strokeCircle(0,0,r);
+            this.rjBase.fillStyle(0xff6644, 0.06); this.rjBase.fillCircle(0,0,r);
+            this.rjThumb = this.add.graphics().setDepth(101).setVisible(false).setScrollFactor(0);
+            this.rjThumb.fillStyle(0xff6644, 0.35); this.rjThumb.fillCircle(0,0,26);
+            this.rjThumb.lineStyle(2, 0xff6644, 0.6); this.rjThumb.strokeCircle(0,0,26);
+        }
+
+        _setupTouch() {
+            const s = this;
+            const DZ = GAME_CONFIG.JOYSTICK_DEADZONE;
+            const R = GAME_CONFIG.JOYSTICK_RADIUS;
+
+            this.input.on('pointerdown', (p) => {
+                const sx = p.x / (this.scale.displaySize.width / GAME_CONFIG.DESIGN_WIDTH);
+                if (sx < GAME_CONFIG.DESIGN_WIDTH * 0.5 && !s.leftJoystickActive) {
+                    s.leftJoystickActive = true; s.leftJoystickPointerID = p.id;
+                    s.leftJoystickOrigin.x = p.x; s.leftJoystickOrigin.y = p.y;
+                    s.ljBase.setPosition(p.x, p.y).setVisible(true);
+                    s.ljThumb.setPosition(p.x, p.y).setVisible(true);
+                } else if (sx >= GAME_CONFIG.DESIGN_WIDTH * 0.5 && !s.rightJoystickActive) {
+                    s.rightJoystickActive = true; s.rightJoystickPointerID = p.id;
+                    s.rightJoystickOrigin.x = p.x; s.rightJoystickOrigin.y = p.y;
+                    s.rjBase.setPosition(p.x, p.y).setVisible(true);
+                    s.rjThumb.setPosition(p.x, p.y).setVisible(true);
+                }
+            });
+
+            this.input.on('pointermove', (p) => {
+                if (s.leftJoystickActive && p.id === s.leftJoystickPointerID) {
+                    const r = this._computeJoystick(p, s.leftJoystickOrigin);
+                    s.ljThumb.setPosition(r.thumbX, r.thumbY);
+                    if (r.magnitude < DZ) { s.moveVector.x = 0; s.moveVector.y = 0; }
+                    else { s.moveVector.x = Math.cos(r.angle) * r.magnitude; s.moveVector.y = Math.sin(r.angle) * r.magnitude; }
+                }
+                if (s.rightJoystickActive && p.id === s.rightJoystickPointerID) {
+                    const r = this._computeJoystick(p, s.rightJoystickOrigin);
+                    s.rjThumb.setPosition(r.thumbX, r.thumbY);
+                    if (r.magnitude < DZ) { s.aimVector.x = 0; s.aimVector.y = 0; }
+                    else { s.aimVector.x = Math.cos(r.angle) * r.magnitude; s.aimVector.y = Math.sin(r.angle) * r.magnitude; }
+                }
+            });
+
+            const up = (p) => {
+                if (p.id === s.leftJoystickPointerID) {
+                    s.leftJoystickActive = false; s.leftJoystickPointerID = null;
+                    s.moveVector.x = 0; s.moveVector.y = 0;
+                    s.ljBase.setVisible(false); s.ljThumb.setVisible(false);
+                }
+                if (p.id === s.rightJoystickPointerID) {
+                    if (Math.abs(s.aimVector.x) > 0.1 || Math.abs(s.aimVector.y) > 0.1) s._triggerDash();
+                    s.rightJoystickActive = false; s.rightJoystickPointerID = null;
+                    s.aimVector.x = 0; s.aimVector.y = 0;
+                    s.rjBase.setVisible(false); s.rjThumb.setVisible(false);
+                }
+            };
+            this.input.on('pointerup', up);
+            this.input.on('pointerupoutside', up);
+        }
+
+        _computeJoystick(p, o) {
+            const dx = p.x - o.x, dy = p.y - o.y, d = Math.sqrt(dx*dx + dy*dy);
+            const m = GAME_CONFIG.JOYSTICK_RADIUS, c = Math.min(d, m), a = Math.atan2(dy, dx);
+            return { angle: a, magnitude: c / m, thumbX: o.x + Math.cos(a) * c, thumbY: o.y + Math.sin(a) * c };
+        }
+
+        _triggerDash() {
+            if (this.isDashing || this.dashCooldown > 0) return;
+            let dx = this.aimVector.x || this.moveVector.x;
+            let dy = this.aimVector.y || this.moveVector.y;
+            if (Math.abs(dx) < 0.01 && Math.abs(dy) < 0.01) dx = 1; // default right
+            const m = Math.sqrt(dx*dx + dy*dy);
+            this.dashDir.x = dx / m; this.dashDir.y = dy / m;
+            this.isDashing = true;
+            this.dashTimer = GAME_CONFIG.DASH_DURATION;
+            this.dashCooldown = GAME_CONFIG.DASH_COOLDOWN;
+        }
+
+        update(time, delta) {
+            const dt = delta / 1000;
+            this.highlightPhase += dt * 4;
+
+            // Keyboard input
+            if (!this.leftJoystickActive) {
+                let kx = 0, ky = 0;
+                if (this.wasdKeys.left.isDown) kx -= 1;
+                if (this.wasdKeys.right.isDown) kx += 1;
+                if (this.wasdKeys.up.isDown) ky -= 1;
+                if (this.wasdKeys.down.isDown) ky += 1;
+                const m = Math.sqrt(kx*kx + ky*ky);
+                if (m > 0) { this.moveVector.x = kx / m; this.moveVector.y = ky / m; }
+                else { this.moveVector.x = 0; this.moveVector.y = 0; }
+            }
+
+            // Dash cooldown
+            if (this.dashCooldown > 0) this.dashCooldown -= delta;
+
+            // Movement / Dash
+            if (this.isDashing) {
+                this.dashTimer -= delta;
+                if (this.dashTimer <= 0) { this.isDashing = false; }
+                else {
+                    this.playerPos.x += this.dashDir.x * GAME_CONFIG.DASH_SPEED * dt;
+                    this.playerPos.y += this.dashDir.y * GAME_CONFIG.DASH_SPEED * dt * GAME_CONFIG.ISO_Y_SCALE;
+                }
+                // Check tag on dummies during dash
+                this.dummies.forEach(d => {
+                    if (d.tagged) return;
+                    const dx = d.x - this.playerPos.x, dy = d.y - this.playerPos.y;
+                    if (Math.sqrt(dx*dx + dy*dy) < GAME_CONFIG.TAG_RANGE) {
+                        d.tagged = true;
+                        this._drawDummy(d);
+                        // Update highlight to next untagged
+                        this.highlightTarget = this.dummies.find(dd => !dd.tagged) || null;
+                    }
+                });
+            } else {
+                const spd = GAME_CONFIG.PLAYER_SPEED;
+                this.playerPos.x += this.moveVector.x * spd * dt;
+                this.playerPos.y += this.moveVector.y * spd * dt * GAME_CONFIG.ISO_Y_SCALE;
+            }
+
+            // Clamp to court
+            if (this.courtBounds) {
+                this.playerPos.x = Phaser.Math.Clamp(this.playerPos.x, this.courtBounds.x, this.courtBounds.right);
+                this.playerPos.y = Phaser.Math.Clamp(this.playerPos.y, this.courtBounds.y, this.courtBounds.bottom);
+            }
+
+            // Track movement for step 1
+            if (Math.abs(this.moveVector.x) > 0.01 || Math.abs(this.moveVector.y) > 0.01) {
+                this._moveAccum = (this._moveAccum || 0) + dt;
+                if (this._moveAccum > 0.8) this._playerMoved = true;
+            }
+
+            this._drawPlayer();
+
+            // Draw highlight ring
+            this.highlightGfx.clear();
+            if (this.highlightTarget) {
+                const hx = this.highlightTarget.x, hy = this.highlightTarget.y;
+                const pulse = 0.4 + Math.sin(this.highlightPhase) * 0.3;
+                const r = 35 + Math.sin(this.highlightPhase * 0.7) * 8;
+                this.highlightGfx.lineStyle(3, 0xf0c040, pulse);
+                this.highlightGfx.strokeCircle(hx, hy, r);
+                this.highlightGfx.lineStyle(1.5, 0xf0c040, pulse * 0.5);
+                this.highlightGfx.strokeCircle(hx, hy, r + 10);
+                // Arrow from player toward target
+                const adx = hx - this.playerPos.x, ady = hy - this.playerPos.y;
+                const ad = Math.sqrt(adx*adx + ady*ady);
+                if (ad > 60) {
+                    const nx = adx / ad, ny = ady / ad;
+                    const ax = this.playerPos.x + nx * 40, ay = this.playerPos.y + ny * 40;
+                    this.highlightGfx.lineStyle(2, 0xf0c040, 0.35);
+                    this.highlightGfx.lineBetween(ax, ay, ax + nx * 20, ay + ny * 20);
+                }
+            }
+
+            // Check step condition
+            const step = this.steps[this.currentStep];
+            if (step && step.condition()) {
+                this._enterStep(this.currentStep + 1);
+            }
+        }
+    }
+    window.TutorialScene = TutorialScene;
+    </script>
+
+    <!-- ================================================================
+         AGENT PHYSICS — MainGameScene (Slice 5 — All Features)
          Now supports: player as raider OR defender.
          AI raider with evasion + tag behavior.
          Environment switching (stadium ↔ courtyard).
@@ -1516,6 +2444,29 @@
             this.playerBodyGfx = null;    // dedicated Graphics for character redraw
             this.defenderBodyGfx = [];    // per-defender body Graphics
             this.aiRaiderBodyGfx = null;
+
+            // Phase 3: Arena presentation
+            this.spectatorGfx = null;     // crowd silhouettes layer
+            this.arenaTime = 0;           // time accumulator for crowd animation
+
+            // Slice 5: New systems
+            this.comboSystem = null;
+            this.difficulty = 'normal';
+            this.diffConfig = DIFFICULTY_CONFIG.normal;
+            this.currentFormation = FORMATION.BOX;
+            this.formationTimer = 0;
+
+            // Defender pick
+            this.selectedDefenderIdx = 0;
+            this._defPickUI = null; // container for pick overlay
+        }
+
+        init(data) {
+            // Accept difficulty from MenuScene
+            if (data && data.difficulty && DIFFICULTY_CONFIG[data.difficulty]) {
+                this.difficulty = data.difficulty;
+                this.diffConfig = DIFFICULTY_CONFIG[data.difficulty];
+            }
         }
 
         create() {
@@ -1524,9 +2475,13 @@
             this.turnManager = new TurnManager(this);
             this.ultimateSystem = new UltimateSystem(this);
             this.animSystem = new AnimationSystem();
+            this.comboSystem = new ComboSystem(this);
 
             this.courtGfx = this.add.graphics().setDepth(0);
+            this.spectatorGfx = this.add.graphics().setDepth(0);  // Phase 3: crowd layer behind court
             this.drawCourt('stadium');
+            PremiumCourtRenderer.drawSpectators(this.spectatorGfx, 'stadium', 0);
+            PremiumCourtRenderer.drawZoneLabels(this, 'stadium');
 
             this.spawnPlayer(COURT.CENTER_X-200, COURT.CENTER_Y);
             this.spawnDefenders();
@@ -1550,11 +2505,22 @@
                 COURT.CENTER_X-COURT.WIDTH/2+20, COURT.CENTER_Y-COURT.HEIGHT/2+20,
                 COURT.WIDTH-40, COURT.HEIGHT-40);
 
-            document.getElementById('loading-overlay').classList.add('hidden');
+            // Phase 4: PostFX glow pipeline
+            this._setupPostFX();
+
+            // Show difficulty badge
+            this.add.text(GAME_CONFIG.DESIGN_WIDTH - 10, GAME_CONFIG.DESIGN_HEIGHT - 10,
+                this.diffConfig.label, {
+                fontFamily: '"Segoe UI", system-ui, sans-serif', fontSize: '9px',
+                color: 'rgba(240,192,64,0.2)', letterSpacing: '2px',
+            }).setOrigin(1, 1).setDepth(200);
+
             this.turnManager.startPreRaid();
 
             this.input.on('pointerdown', () => {
-                if (this.turnManager.phase === GAME_PHASE.MATCH_OVER) this.restartMatch();
+                if (this.turnManager.phase === GAME_PHASE.MATCH_OVER) {
+                    this.scene.start('MenuScene');
+                }
             });
         }
 
@@ -1567,6 +2533,10 @@
             this.courtGfx.clear();
             this.drawCourt(env);
             document.getElementById('env-label').textContent = env === 'stadium' ? 'Modern Stadium' : 'Ancient Courtyard';
+
+            // Phase 3: Refresh spectators and zone labels
+            PremiumCourtRenderer.drawSpectators(this.spectatorGfx, env, this.arenaTime || 0);
+            PremiumCourtRenderer.drawZoneLabels(this, env);
 
             // Torch particles only in courtyard
             if (env === 'courtyard') {
@@ -1593,6 +2563,30 @@
         }
 
         // ════════════════════════════════════════════════════
+        // PHASE 4: PostFX Pipeline
+        // Adds bloom glow + subtle color grading via Phaser's PostFX.
+        // Falls back gracefully if WebGL pipelines aren't available.
+        // ════════════════════════════════════════════════════
+        _setupPostFX() {
+            try {
+                // Phaser 3.60+ has built-in PostFX pipelines
+                if (this.cameras && this.cameras.main && this.cameras.main.postFX) {
+                    const cam = this.cameras.main;
+                    // Bloom — subtle glow on bright elements
+                    cam.postFX.addBloom(0xffffff, 0.8, 0.8, 1.2, 1.5);
+                    // Vignette — darkened edges for focus
+                    cam.postFX.addVignette(0.5, 0.5, 0.85, 0.35);
+                    this._postFXEnabled = true;
+                } else {
+                    this._postFXEnabled = false;
+                }
+            } catch(e) {
+                // PostFX not supported in this Phaser version — no problem
+                this._postFXEnabled = false;
+            }
+        }
+
+        // ════════════════════════════════════════════════════
         // ENTITY SPAWNING
         // ════════════════════════════════════════════════════
         spawnPlayer(x,y) {
@@ -1608,9 +2602,17 @@
             });
             const num=this.add.text(0,6,'7',{fontFamily:'"Segoe UI",system-ui,sans-serif',fontSize:'13px',fontStyle:'bold',color:'#fff'}).setOrigin(0.5);
             this.facingIndicator=this.add.graphics();
-            this.facingIndicator.fillStyle(0xffffff,0.7);this.facingIndicator.fillTriangle(0,-44,-5,-36,5,-36);
-            this.playerLabel=this.add.text(0,-52,'RAIDER',{fontFamily:'"Segoe UI",system-ui,sans-serif',fontSize:'9px',fontStyle:'bold',color:'#ff6644',letterSpacing:'2px'}).setOrigin(0.5);
-            this.player.add([this.playerBodyGfx,num,this.facingIndicator,this.playerLabel]);
+            this.facingIndicator.fillStyle(0xff6644,0.85);this.facingIndicator.fillTriangle(0,-44,-6,-35,6,-35);
+            this.facingIndicator.fillStyle(0xffffff,0.6);this.facingIndicator.fillTriangle(0,-42,-3,-37,3,-37);
+            // Prominent "YOU" label above head
+            this.playerLabel=this.add.text(0,-56,'YOU',{fontFamily:'"Segoe UI",system-ui,sans-serif',fontSize:'12px',fontStyle:'bold',color:'#ffffff',letterSpacing:'3px',stroke:'#ff4422',strokeThickness:3}).setOrigin(0.5);
+            // Colored ring around feet
+            const footRing = this.add.graphics();
+            footRing.lineStyle(2.5, 0xff6644, 0.7);
+            footRing.strokeEllipse(0, 18, 40, 16);
+            footRing.lineStyle(1, 0xffffff, 0.3);
+            footRing.strokeEllipse(0, 18, 44, 18);
+            this.player.add([footRing,this.playerBodyGfx,num,this.facingIndicator,this.playerLabel]);
 
             this.animSystem.register('player');
         }
@@ -1631,8 +2633,12 @@
                 this.defenderBodyGfx.push(bodyGfx);
 
                 const nt=this.add.text(0,6,p.n,{fontFamily:'"Segoe UI",system-ui,sans-serif',fontSize:'13px',fontStyle:'bold',color:'#fff'}).setOrigin(0.5);
-                const lb=this.add.text(0,-52,'DEF',{fontFamily:'"Segoe UI",system-ui,sans-serif',fontSize:'9px',fontStyle:'bold',color:'#44aaff',letterSpacing:'2px'}).setOrigin(0.5);
-                c.add([bodyGfx,nt,lb]);
+                const lb=this.add.text(0,-52,'DEF',{fontFamily:'"Segoe UI",system-ui,sans-serif',fontSize:'10px',fontStyle:'bold',color:'#44aaff',letterSpacing:'2px',stroke:'#1a4488',strokeThickness:2}).setOrigin(0.5);
+                // Defender foot ring
+                const defRing = this.add.graphics();
+                defRing.lineStyle(2, 0x3090e8, 0.5);
+                defRing.strokeEllipse(0, 18, 36, 14);
+                c.add([defRing,bodyGfx,nt,lb]);
                 this.defenders.push({container:c,shadow:sh,state:ENTITY_STATE.IDLE,homeX:p.x,homeY:p.y,
                     tackleTimer:0,tackleCooldownTimer:0,tackleDir:{x:0,y:0},
                     aggroRange:200+i*30,pursuitSpeed:GAME_CONFIG.DEFENDER_SPEED+i*15,stunTimer:0,bodyGfx});
@@ -1659,8 +2665,14 @@
                 number: '9', isRaider: true
             });
             const n=this.add.text(0,6,'9',{fontFamily:'"Segoe UI",system-ui,sans-serif',fontSize:'13px',fontStyle:'bold',color:'#fff'}).setOrigin(0.5);
-            const lb=this.add.text(0,-52,'AI RAIDER',{fontFamily:'"Segoe UI",system-ui,sans-serif',fontSize:'9px',fontStyle:'bold',color:'#ff6644',letterSpacing:'2px'}).setOrigin(0.5);
-            this.aiRaider.add([this.aiRaiderBodyGfx,n,lb]);
+            const lb=this.add.text(0,-56,'RAIDER',{fontFamily:'"Segoe UI",system-ui,sans-serif',fontSize:'12px',fontStyle:'bold',color:'#ff6644',letterSpacing:'3px',stroke:'#882200',strokeThickness:3}).setOrigin(0.5);
+            // AI raider foot ring (red/orange)
+            const aiFootRing = this.add.graphics();
+            aiFootRing.lineStyle(2.5, 0xff6644, 0.7);
+            aiFootRing.strokeEllipse(0, 18, 40, 16);
+            aiFootRing.lineStyle(1, 0xff4422, 0.3);
+            aiFootRing.strokeEllipse(0, 18, 44, 18);
+            this.aiRaider.add([aiFootRing,this.aiRaiderBodyGfx,n,lb]);
             this.aiRaider.setVisible(false);
             this.aiRaiderShadow.setVisible(false);
             this.aiRaiderGlow.setVisible(false);
@@ -1682,34 +2694,43 @@
             const {COURT}=GAME_CONFIG;
             const isRaider = this.turnManager.isPlayerRaider;
 
-            // Player entity position depends on role
+            // Reset formation to BOX at start of each raid
+            this.currentFormation = FORMATION.BOX;
+            this.formationTimer = this.diffConfig.formationSwapTime;
+
+            // ── Player position depends on role ──
             if (isRaider) {
                 this.player.setPosition(COURT.CENTER_X-200, COURT.CENTER_Y);
-                this.playerLabel.setText('RAIDER');
-                this.playerLabel.setColor('#ff6644');
+                this.playerLabel.setText('YOU');
+                this.playerLabel.setColor('#ffffff');
+                this.facingAngle = 0; // face right toward defenders
             } else {
-                // Player controls first defender position
-                this.player.setPosition(COURT.CENTER_X+160, COURT.CENTER_Y-100);
-                this.playerLabel.setText('YOU: DEF');
-                this.playerLabel.setColor('#44aaff');
+                // Defender role: place at selected defender slot
+                const formPos = FORMATION_POSITIONS[this.currentFormation](COURT.CENTER_X, COURT.CENTER_Y);
+                const selIdx = this.selectedDefenderIdx || 0;
+                const p = formPos[selIdx % formPos.length];
+                this.player.setPosition(p.x, p.y);
+                this.playerLabel.setText('YOU');
+                this.playerLabel.setColor('#44ddff');
+                this.facingAngle = Math.PI; // face left toward raider
             }
             this.player.setAlpha(1); this.playerState=ENTITY_STATE.IDLE;
             this.dashTimer=0; this.dashCooldownTimer=0;
 
-            // Defenders
-            const defPos=[{x:COURT.CENTER_X+160,y:COURT.CENTER_Y-100},{x:COURT.CENTER_X+220,y:COURT.CENTER_Y+20},{x:COURT.CENTER_X+140,y:COURT.CENTER_Y+110}];
+            // ── Defenders (formation-aware) ──
+            const formPos = FORMATION_POSITIONS[this.currentFormation](COURT.CENTER_X, COURT.CENTER_Y);
+            const selIdx = this.selectedDefenderIdx || 0;
             this.defenders.forEach((def,i)=>{
-                // If player is defender, shift AI defenders to other positions
-                const posIdx = isRaider ? i : (i < 2 ? i+1 : 0);
-                const p = defPos[posIdx % 3];
+                const p = formPos[i % formPos.length];
                 def.container.setPosition(p.x,p.y);def.container.setAlpha(1);def.state=ENTITY_STATE.IDLE;
                 def.tackleTimer=0;def.tackleCooldownTimer=0;def.stunTimer=0;def.homeX=p.x;def.homeY=p.y;
-                // Show/hide based on role
-                def.container.setVisible(isRaider || i > 0); // hide first defender if player controls it
-                def.shadow.setVisible(isRaider || i > 0);
+                // When defending: hide the defender slot the player occupies
+                const isPlayerSlot = !isRaider && i === selIdx;
+                def.container.setVisible(!isPlayerSlot);
+                def.shadow.setVisible(!isPlayerSlot);
             });
 
-            // AI Raider: visible only when player is defender
+            // ── AI Raider: visible only when player is defending ──
             this.aiRaider.setVisible(!isRaider);
             this.aiRaiderShadow.setVisible(!isRaider);
             this.aiRaiderGlow.setVisible(!isRaider);
@@ -1719,7 +2740,6 @@
                 this.aiRaiderDashCD = 0;
             }
 
-            // Hide player raider visuals when defending
             this.player.setVisible(true);
             this.playerShadow.setVisible(true);
             this.playerGlowRing.setVisible(isRaider);
@@ -1736,15 +2756,184 @@
         }
 
         // ════════════════════════════════════════════════════
+        // FORMATION ROTATION (Slice 5)
+        // ════════════════════════════════════════════════════
+        _rotateFormation() {
+            const order = [FORMATION.BOX, FORMATION.CHAIN, FORMATION.CORNER, FORMATION.BONUS_LINE];
+            const idx = order.indexOf(this.currentFormation);
+            this.currentFormation = order[(idx + 1) % order.length];
+
+            const {COURT} = GAME_CONFIG;
+            const cx = COURT.CENTER_X, cy = COURT.CENTER_Y;
+            const positions = FORMATION_POSITIONS[this.currentFormation](cx, cy);
+
+            this.defenders.forEach((def, i) => {
+                const p = positions[i % positions.length];
+                if (p) {
+                    def.homeX = p.x;
+                    def.homeY = p.y;
+                }
+            });
+        }
+
+        // ════════════════════════════════════════════════════
+        // DEFENDER PICK SCREEN
+        // ════════════════════════════════════════════════════
+        _showDefenderPick() {
+            // Clean up old UI if any
+            if (this._defPickUI) { this._defPickUI.destroy(true); this._defPickUI = null; }
+
+            const W = GAME_CONFIG.DESIGN_WIDTH, H = GAME_CONFIG.DESIGN_HEIGHT;
+            const container = this.add.container(0, 0).setDepth(200).setScrollFactor(0);
+            this._defPickUI = container;
+
+            // Dimmed backdrop
+            const bg = this.add.graphics().setScrollFactor(0);
+            bg.fillStyle(0x0a0a12, 0.82);
+            bg.fillRect(0, 0, W, H);
+            container.add(bg);
+
+            // Title
+            const title = this.add.text(W/2, 100, 'DEFEND THIS RAID', {
+                fontFamily: '"Segoe UI", system-ui, sans-serif',
+                fontSize: '28px', fontStyle: 'bold', color: '#44aaff',
+                letterSpacing: 4,
+            }).setOrigin(0.5).setScrollFactor(0);
+            container.add(title);
+
+            const subtitle = this.add.text(W/2, 140, 'Choose your defender', {
+                fontFamily: '"Segoe UI", system-ui, sans-serif',
+                fontSize: '14px', color: 'rgba(255,255,255,0.5)',
+                letterSpacing: 2,
+            }).setOrigin(0.5).setScrollFactor(0);
+            container.add(subtitle);
+
+            // Defender cards
+            const defNames = ['CORNER', 'CHAIN', 'COVER'];
+            const defNums = ['2', '5', '8'];
+            const defDescs = ['Fast & aggressive', 'Balanced all-rounder', 'Strong tackler'];
+            const cardW = 180, cardH = 200, gap = 30;
+            const totalW = 3 * cardW + 2 * gap;
+            const startX = W/2 - totalW/2 + cardW/2;
+
+            for (let i = 0; i < 3; i++) {
+                const cx = startX + i * (cardW + gap);
+                const cy = H/2 + 10;
+
+                // Card background
+                const card = this.add.graphics().setScrollFactor(0);
+                card.fillStyle(0x3090e8, 0.08);
+                card.fillRoundedRect(cx - cardW/2, cy - cardH/2, cardW, cardH, 12);
+                card.lineStyle(2, 0x3090e8, 0.3);
+                card.strokeRoundedRect(cx - cardW/2, cy - cardH/2, cardW, cardH, 12);
+                container.add(card);
+
+                // Character preview
+                const charGfx = this.add.graphics().setScrollFactor(0);
+                ProceduralCharacterRenderer.drawCharacter(charGfx, {
+                    bodyColor: GAME_CONFIG.COLORS.DEFENDER_BODY, accentColor: 0x2070c0,
+                    number: defNums[i], isRaider: false, state: 'idle',
+                    animPhase: 0, facingX: -1,
+                });
+                charGfx.setPosition(cx, cy - 30);
+                container.add(charGfx);
+
+                // Number
+                const numTxt = this.add.text(cx, cy - 24, defNums[i], {
+                    fontFamily: '"Segoe UI", system-ui, sans-serif',
+                    fontSize: '16px', fontStyle: 'bold', color: '#ffffff',
+                }).setOrigin(0.5).setScrollFactor(0);
+                container.add(numTxt);
+
+                // Name & description
+                const nameTxt = this.add.text(cx, cy + 40, defNames[i], {
+                    fontFamily: '"Segoe UI", system-ui, sans-serif',
+                    fontSize: '14px', fontStyle: 'bold', color: '#44aaff',
+                    letterSpacing: 2,
+                }).setOrigin(0.5).setScrollFactor(0);
+                container.add(nameTxt);
+
+                const descTxt = this.add.text(cx, cy + 60, defDescs[i], {
+                    fontFamily: '"Segoe UI", system-ui, sans-serif',
+                    fontSize: '10px', color: 'rgba(255,255,255,0.4)',
+                }).setOrigin(0.5).setScrollFactor(0);
+                container.add(descTxt);
+
+                // Hit area
+                const hitArea = this.add.rectangle(cx, cy, cardW, cardH)
+                    .setInteractive({ useHandCursor: true }).setAlpha(0.001).setScrollFactor(0);
+                container.add(hitArea);
+
+                const defIdx = i;
+                hitArea.on('pointerover', () => {
+                    card.clear();
+                    card.fillStyle(0x3090e8, 0.2);
+                    card.fillRoundedRect(cx - cardW/2, cy - cardH/2, cardW, cardH, 12);
+                    card.lineStyle(2.5, 0x44ddff, 0.7);
+                    card.strokeRoundedRect(cx - cardW/2, cy - cardH/2, cardW, cardH, 12);
+                });
+                hitArea.on('pointerout', () => {
+                    card.clear();
+                    card.fillStyle(0x3090e8, 0.08);
+                    card.fillRoundedRect(cx - cardW/2, cy - cardH/2, cardW, cardH, 12);
+                    card.lineStyle(2, 0x3090e8, 0.3);
+                    card.strokeRoundedRect(cx - cardW/2, cy - cardH/2, cardW, cardH, 12);
+                });
+                hitArea.on('pointerdown', () => {
+                    this._confirmDefenderPick(defIdx);
+                });
+            }
+
+            // Tip text
+            const tip = this.add.text(W/2, H - 60, 'The AI raider will try to tag your team. Stop them!', {
+                fontFamily: '"Segoe UI", system-ui, sans-serif',
+                fontSize: '11px', color: 'rgba(255,255,255,0.3)',
+            }).setOrigin(0.5).setScrollFactor(0);
+            container.add(tip);
+        }
+
+        _confirmDefenderPick(idx) {
+            this.selectedDefenderIdx = idx;
+
+            // Remove pick UI
+            if (this._defPickUI) { this._defPickUI.destroy(true); this._defPickUI = null; }
+
+            // Now reset positions with the chosen defender and start the countdown
+            this.resetRaidPositions();
+
+            // Show banner and start normal pre-raid countdown
+            this.turnManager.phaseTimer = GAME_CONFIG.PHASE_PRE_RAID_TIME;
+            const bannerEl = document.getElementById('turn-banner');
+            const bannerTitle = document.getElementById('banner-title');
+            const bannerSub = document.getElementById('banner-sub');
+            bannerTitle.textContent = `RAID ${this.turnManager.currentTurn}`;
+            bannerSub.textContent = 'You are DEFENDING — tackle the raider!';
+            bannerEl.classList.add('show');
+        }
+
+        // ════════════════════════════════════════════════════
         // INPUT
         // ════════════════════════════════════════════════════
         setupDualTouchJoysticks() {
             const s=this;
+
+            // Mobile touch polish: edge-swipe dead zone (prevents accidental browser gestures)
+            const EDGE_MARGIN = 20; // px from screen edge to ignore touches
+
             this.input.on('pointerdown',(p)=>{
                 if(!this.turnManager.isRaidActive) return;
+
+                // Edge-swipe prevention: ignore touches very near screen edges
+                const rawX = p.event ? (p.event.clientX || p.x) : p.x;
+                const rawY = p.event ? (p.event.clientY || p.y) : p.y;
+                const screenW = window.innerWidth, screenH = window.innerHeight;
+                if (rawX < EDGE_MARGIN || rawX > screenW - EDGE_MARGIN ||
+                    rawY < EDGE_MARGIN || rawY > screenH - EDGE_MARGIN) return;
+
                 const sx=p.x/(this.scale.displaySize.width/GAME_CONFIG.DESIGN_WIDTH);
                 if(sx<GAME_CONFIG.DESIGN_WIDTH*0.5&&!s.leftJoystickActive){
                     s.leftJoystickActive=true;s.leftJoystickPointerID=p.id;
+                    // Joystick repositions to touch point
                     s.leftJoystickOrigin.x=p.x;s.leftJoystickOrigin.y=p.y;
                     s.leftJoystickBase.setPosition(p.x,p.y).setVisible(true);
                     s.leftJoystickThumb.setPosition(p.x,p.y).setVisible(true);
@@ -1785,18 +2974,18 @@
             this.leftJoystickBase=this.add.graphics().setDepth(100).setVisible(false).setScrollFactor(0);
             this.leftJoystickBase.lineStyle(2,0xffffff,0.2);this.leftJoystickBase.strokeCircle(0,0,r);this.leftJoystickBase.fillStyle(0xffffff,0.05);this.leftJoystickBase.fillCircle(0,0,r);
             this.leftJoystickThumb=this.add.graphics().setDepth(101).setVisible(false).setScrollFactor(0);
-            this.leftJoystickThumb.fillStyle(0xffffff,0.3);this.leftJoystickThumb.fillCircle(0,0,22);this.leftJoystickThumb.lineStyle(2,0xffffff,0.5);this.leftJoystickThumb.strokeCircle(0,0,22);
+            this.leftJoystickThumb.fillStyle(0xffffff,0.3);this.leftJoystickThumb.fillCircle(0,0,28);this.leftJoystickThumb.lineStyle(2,0xffffff,0.5);this.leftJoystickThumb.strokeCircle(0,0,28);
             this.rightJoystickBase=this.add.graphics().setDepth(100).setVisible(false).setScrollFactor(0);
             this.rightJoystickBase.lineStyle(2,0xff6644,0.25);this.rightJoystickBase.strokeCircle(0,0,r);this.rightJoystickBase.fillStyle(0xff6644,0.06);this.rightJoystickBase.fillCircle(0,0,r);
             this.rightJoystickThumb=this.add.graphics().setDepth(101).setVisible(false).setScrollFactor(0);
-            this.rightJoystickThumb.fillStyle(0xff6644,0.35);this.rightJoystickThumb.fillCircle(0,0,20);this.rightJoystickThumb.lineStyle(2,0xff6644,0.6);this.rightJoystickThumb.strokeCircle(0,0,20);
+            this.rightJoystickThumb.fillStyle(0xff6644,0.35);this.rightJoystickThumb.fillCircle(0,0,26);this.rightJoystickThumb.lineStyle(2,0xff6644,0.6);this.rightJoystickThumb.strokeCircle(0,0,26);
         }
 
         setupKeyboardInput(){
             this.wasdKeys=this.input.keyboard.addKeys({up:Phaser.Input.Keyboard.KeyCodes.W,down:Phaser.Input.Keyboard.KeyCodes.S,left:Phaser.Input.Keyboard.KeyCodes.A,right:Phaser.Input.Keyboard.KeyCodes.D});
             this.input.keyboard.on('keydown-SPACE',()=>{if(!this.turnManager.isRaidActive)return;if(!this.ultimateSystem.tryActivate())this.triggerAction(Math.cos(this.facingAngle),Math.sin(this.facingAngle));});
             this.input.keyboard.on('keydown-E',()=>{if(!this.turnManager.isRaidActive)return;this.ultimateSystem.tryActivate();});
-            this.input.on('pointerdown',(p)=>{if(!this.turnManager.isRaidActive)return;if(p.button===0&&!this.leftJoystickActive&&!this.rightJoystickActive){const w=this.cameras.main.getWorldPoint(p.x,p.y);const dx=w.x-this.player.x,dy=w.y-this.player.y,m=Math.sqrt(dx*dx+dy*dy);if(m>5)this.triggerAction(dx/m,dy/m);}});
+            this.input.on('pointerdown',(p)=>{if(!this.turnManager.isRaidActive)return;if((p.button===0||p.button==null)&&!this.leftJoystickActive&&!this.rightJoystickActive){const w=this.cameras.main.getWorldPoint(p.x,p.y);const dx=w.x-this.player.x,dy=w.y-this.player.y,m=Math.sqrt(dx*dx+dy*dy);if(m>5)this.triggerAction(dx/m,dy/m);}});
         }
 
         readKeyboardInput(){
@@ -1882,6 +3071,7 @@
             def.state=ENTITY_STATE.TAGGED; def.stunTimer=1500;
             this.raiderScore++; document.getElementById('hud-raider-score').textContent=this.raiderScore;
             this.ultimateSystem.addMeter(GAME_CONFIG.ULT_GAIN_TAG);
+            if (this.comboSystem) this.comboSystem.addHit();
             const mx=(this.player.x+def.container.x)/2,my=(this.player.y+def.container.y)/2;
             this.vfx.triggerFullImpact(mx,my,GAME_CONFIG.COLORS.TRAIL_RAIDER);
             this.tweens.add({targets:def.container,alpha:0.3,yoyo:true,repeat:3,duration:100});
@@ -1918,6 +3108,7 @@
             if(this.playerState===ENTITY_STATE.OUT) return;
             this.playerState=ENTITY_STATE.STUNNED; def.state=ENTITY_STATE.IDLE;
             this.defenderScore++; document.getElementById('hud-defender-score').textContent=this.defenderScore;
+            if (this.comboSystem) this.comboSystem.reset();
             const mx=(this.player.x+def.container.x)/2,my=(this.player.y+def.container.y)/2;
             this.vfx.triggerFullImpact(mx,my,GAME_CONFIG.COLORS.TRAIL_DEFENDER);
             this.tweens.add({targets:this.player,alpha:0.3,yoyo:true,repeat:4,duration:100,onComplete:()=>{this.playerState=ENTITY_STATE.IDLE;this.player.setAlpha(1);}});
@@ -1932,6 +3123,7 @@
             this.vfx.triggerFullImpact(mx,my,GAME_CONFIG.COLORS.TRAIL_DEFENDER);
             this.tweens.add({targets:this.aiRaider,alpha:0.3,yoyo:true,repeat:4,duration:100,onComplete:()=>{this.aiRaiderState=ENTITY_STATE.IDLE;this.aiRaider.setAlpha(1);}});
             this.ultimateSystem.addMeter(GAME_CONFIG.ULT_GAIN_TAG); // reward tackle
+            if (this.comboSystem && this.turnManager.isPlayerDefender) this.comboSystem.addHit();
             this.turnManager.endRaid('tackled');
         }
 
@@ -1945,11 +3137,22 @@
             const raiderY = this.turnManager.isPlayerRaider ? this.player.y : this.aiRaider.y;
             const raiderAlive = this.turnManager.isPlayerRaider ? (this.playerState!==ENTITY_STATE.OUT) : (this.aiRaiderState!==ENTITY_STATE.OUT);
 
+            // Difficulty scaling factors
+            const dc = this.diffConfig;
+            const spdMult = dc.speedMult;
+            const aggroMult = dc.aggroMult;
+            const tackleAcc = dc.tackleAccuracy;
+            const reactDelay = dc.reactionDelay;
+
             this.defenders.forEach((def,i)=>{
-                // Skip if player controls this defender
-                if(!this.turnManager.isPlayerRaider && i===0) return;
+                // Skip the defender slot the player controls
+                if(!this.turnManager.isPlayerRaider && i===this.selectedDefenderIdx) return;
 
                 if(def.tackleCooldownTimer>0) def.tackleCooldownTimer-=dt*1000;
+
+                // Reaction delay: if defender recently spotted raider, add delay before pursuing
+                if (!def._reactionTimer) def._reactionTimer = 0;
+
                 if(def.state===ENTITY_STATE.TAGGED||def.state===ENTITY_STATE.STUNNED){
                     def.stunTimer-=dt*1000;if(def.stunTimer<=0){def.state=ENTITY_STATE.IDLE;def.container.setAlpha(1);}
                     this.drawEntityShadow(def.shadow,def.container.x,def.container.y,0.5);return;
@@ -1957,8 +3160,8 @@
                 if(def.state===ENTITY_STATE.TACKLING){
                     def.tackleTimer-=dt*1000;if(def.tackleTimer<=0){def.state=ENTITY_STATE.IDLE;}
                     else{
-                        let nx=def.container.x+def.tackleDir.x*GAME_CONFIG.TACKLE_SPEED*dt;
-                        let ny=def.container.y+def.tackleDir.y*GAME_CONFIG.TACKLE_SPEED*dt*GAME_CONFIG.ISO_Y_SCALE;
+                        let nx=def.container.x+def.tackleDir.x*GAME_CONFIG.TACKLE_SPEED*spdMult*dt;
+                        let ny=def.container.y+def.tackleDir.y*GAME_CONFIG.TACKLE_SPEED*spdMult*dt*GAME_CONFIG.ISO_Y_SCALE;
                         if(this.courtBounds){nx=Phaser.Math.Clamp(nx,this.courtBounds.x,this.courtBounds.right);ny=Phaser.Math.Clamp(ny,this.courtBounds.y,this.courtBounds.bottom);}
                         def.container.setPosition(nx,ny);
                         this.vfx.spawnTrailStamp(nx,ny,GAME_CONFIG.COLORS.TRAIL_DEFENDER,def.tackleDir.x,def.tackleDir.y,false);
@@ -1969,20 +3172,36 @@
 
                 const ddx=raiderX-def.container.x,ddy=raiderY-def.container.y;
                 const dist=Math.sqrt(ddx*ddx+ddy*ddy);
-                if(dist<def.aggroRange&&raiderAlive){
+                const effectiveAggro = def.aggroRange * aggroMult;
+                if(dist<effectiveAggro&&raiderAlive){
+                    // Reaction delay: don't pursue until timer expires
+                    if (def._reactionTimer < reactDelay) {
+                        def._reactionTimer += dt * 1000;
+                        def.state = ENTITY_STATE.IDLE;
+                        this.drawEntityShadow(def.shadow,def.container.x,def.container.y,1);def.container.setDepth(10+def.container.y*0.01);
+                        return;
+                    }
+
                     def.state=ENTITY_STATE.MOVING;
                     const ndx=ddx/dist,ndy=ddy/dist;
-                    let nx=def.container.x+ndx*def.pursuitSpeed*dt;
-                    let ny=def.container.y+ndy*def.pursuitSpeed*dt*GAME_CONFIG.ISO_Y_SCALE;
+                    let nx=def.container.x+ndx*def.pursuitSpeed*spdMult*dt;
+                    let ny=def.container.y+ndy*def.pursuitSpeed*spdMult*dt*GAME_CONFIG.ISO_Y_SCALE;
                     if(this.courtBounds){nx=Phaser.Math.Clamp(nx,this.courtBounds.x,this.courtBounds.right);ny=Phaser.Math.Clamp(ny,this.courtBounds.y,this.courtBounds.bottom);}
                     def.container.setPosition(nx,ny);
                     if(dist<GAME_CONFIG.TACKLE_RANGE&&def.tackleCooldownTimer<=0){
-                        def.state=ENTITY_STATE.TACKLING;def.tackleTimer=GAME_CONFIG.TACKLE_DURATION;
-                        def.tackleCooldownTimer=GAME_CONFIG.TACKLE_COOLDOWN;def.tackleDir.x=ndx;def.tackleDir.y=ndy;
-                        this.vfx.spawnTackleArc(def.container.x,def.container.y,ndx,ndy,GAME_CONFIG.COLORS.TRAIL_DEFENDER);
+                        // Tackle accuracy gate: lower difficulties miss more often
+                        if (Math.random() < tackleAcc) {
+                            def.state=ENTITY_STATE.TACKLING;def.tackleTimer=GAME_CONFIG.TACKLE_DURATION;
+                            def.tackleCooldownTimer=GAME_CONFIG.TACKLE_COOLDOWN;def.tackleDir.x=ndx;def.tackleDir.y=ndy;
+                            this.vfx.spawnTackleArc(def.container.x,def.container.y,ndx,ndy,GAME_CONFIG.COLORS.TRAIL_DEFENDER);
+                        } else {
+                            // Missed tackle — go on cooldown anyway
+                            def.tackleCooldownTimer = GAME_CONFIG.TACKLE_COOLDOWN * 1.5;
+                        }
                     }
                 }else{
                     def.state=ENTITY_STATE.IDLE;
+                    def._reactionTimer = 0; // Reset reaction timer when raider leaves aggro
                     const hx=def.homeX-def.container.x,hy=def.homeY-def.container.y,hd=Math.sqrt(hx*hx+hy*hy);
                     if(hd>5){def.container.x+=hx/hd*60*dt;def.container.y+=hy/hd*60*dt*GAME_CONFIG.ISO_Y_SCALE;}
                 }
@@ -2115,6 +3334,7 @@
 
             this.playerState=ENTITY_STATE.STUNNED;
             this.raiderScore++;document.getElementById('hud-raider-score').textContent=this.raiderScore;
+            if (this.comboSystem) this.comboSystem.reset();
             const mx=(this.aiRaider.x+this.player.x)/2,my=(this.aiRaider.y+this.player.y)/2;
             this.vfx.triggerFullImpact(mx,my,GAME_CONFIG.COLORS.TRAIL_RAIDER);
             this.tweens.add({targets:this.player,alpha:0.3,yoyo:true,repeat:4,duration:100,onComplete:()=>{this.playerState=ENTITY_STATE.IDLE;this.player.setAlpha(1);}});
@@ -2143,7 +3363,17 @@
 
             this.turnManager.update(dt);
             this.ultimateSystem.update(dt);
+            if (this.comboSystem) this.comboSystem.update(dt);
             if(this.dashCooldownTimer>0) this.dashCooldownTimer-=delta;
+
+            // Slice 5: Formation rotation timer
+            if (this.turnManager.isRaidActive && this.turnManager.isPlayerRaider) {
+                this.formationTimer -= delta;
+                if (this.formationTimer <= 0) {
+                    this._rotateFormation();
+                    this.formationTimer = this.diffConfig.formationSwapTime;
+                }
+            }
 
             if(this.turnManager.isRaidActive) {
                 this.readKeyboardInput();
@@ -2196,42 +3426,51 @@
             this.drawEntityShadow(this.playerShadow, this.player.x, this.player.y, 1);
             this.glowPulsePhase+=dt*3.5;
 
-            // ── Phase 1: Animate & redraw characters ──
+            // ── Animate & redraw characters (Phase 5: dirty-check optimization) ──
             this.animSystem.update('player', dt, this.playerState, this.moveVector.x);
             const pAnim = this.animSystem.getParams('player');
             const isR = this.turnManager.isPlayerRaider;
-            ProceduralCharacterRenderer.drawCharacter(this.playerBodyGfx, {
-                bodyColor: isR ? GAME_CONFIG.COLORS.PLAYER_BODY : GAME_CONFIG.COLORS.DEFENDER_BODY,
-                accentColor: isR ? 0xcc3a20 : 0x2070c0,
-                isRaider: isR, state: pAnim.state,
-                animPhase: pAnim.animPhase, facingX: pAnim.facingX,
-            });
+            if (pAnim.dirty) {
+                ProceduralCharacterRenderer.drawCharacter(this.playerBodyGfx, {
+                    bodyColor: isR ? GAME_CONFIG.COLORS.PLAYER_BODY : GAME_CONFIG.COLORS.DEFENDER_BODY,
+                    accentColor: isR ? 0xcc3a20 : 0x2070c0,
+                    isRaider: isR, state: pAnim.state,
+                    animPhase: pAnim.animPhase, facingX: pAnim.facingX,
+                });
+                this.animSystem.markDrawn('player');
+            }
 
-            // Redraw defenders
+            // Redraw defenders (only when dirty)
             this.defenders.forEach((def, i) => {
                 const dx = (this.turnManager.isPlayerRaider ? this.player.x : this.aiRaider.x) - def.container.x;
                 this.animSystem.update('def_'+i, dt, def.state, dx);
                 if (def.bodyGfx) {
                     const da = this.animSystem.getParams('def_'+i);
-                    ProceduralCharacterRenderer.drawCharacter(def.bodyGfx, {
-                        bodyColor: GAME_CONFIG.COLORS.DEFENDER_BODY, accentColor: 0x2070c0,
-                        isRaider: false, state: da.state,
-                        animPhase: da.animPhase, facingX: da.facingX,
-                    });
+                    if (da.dirty) {
+                        ProceduralCharacterRenderer.drawCharacter(def.bodyGfx, {
+                            bodyColor: GAME_CONFIG.COLORS.DEFENDER_BODY, accentColor: 0x2070c0,
+                            isRaider: false, state: da.state,
+                            animPhase: da.animPhase, facingX: da.facingX,
+                        });
+                        this.animSystem.markDrawn('def_'+i);
+                    }
                 }
             });
 
-            // Redraw AI raider
+            // Redraw AI raider (only when dirty)
             if (this.aiRaider.visible && this.aiRaiderBodyGfx) {
                 const arMoveX = this.aiRaider.x - (this.aiRaider.getData('prevX') || this.aiRaider.x);
                 this.aiRaider.setData('prevX', this.aiRaider.x);
                 this.animSystem.update('aiRaider', dt, this.aiRaiderState, arMoveX);
                 const arAnim = this.animSystem.getParams('aiRaider');
-                ProceduralCharacterRenderer.drawCharacter(this.aiRaiderBodyGfx, {
-                    bodyColor: GAME_CONFIG.COLORS.PLAYER_BODY, accentColor: 0xcc3a20,
-                    isRaider: true, state: arAnim.state,
-                    animPhase: arAnim.animPhase, facingX: arAnim.facingX,
-                });
+                if (arAnim.dirty) {
+                    ProceduralCharacterRenderer.drawCharacter(this.aiRaiderBodyGfx, {
+                        bodyColor: GAME_CONFIG.COLORS.PLAYER_BODY, accentColor: 0xcc3a20,
+                        isRaider: true, state: arAnim.state,
+                        animPhase: arAnim.animPhase, facingX: arAnim.facingX,
+                    });
+                    this.animSystem.markDrawn('aiRaider');
+                }
             }
 
             // Player glow
@@ -2256,6 +3495,13 @@
             // Torch particles (courtyard)
             if(this.currentEnv==='courtyard') this.vfx.updateTorchParticles(dt);
 
+            // Phase 3: Animate spectator crowd (redraw every ~200ms for performance)
+            this.arenaTime += dt;
+            if (!this._lastCrowdDraw || this.arenaTime - this._lastCrowdDraw > 0.2) {
+                PremiumCourtRenderer.drawSpectators(this.spectatorGfx, this.currentEnv, this.arenaTime);
+                this._lastCrowdDraw = this.arenaTime;
+            }
+
             this.drawAimLine();
             this.player.setDepth(10+this.player.y*0.01);
         }
@@ -2272,7 +3518,7 @@
         scale:{mode:Phaser.Scale.FIT,autoCenter:Phaser.Scale.CENTER_BOTH,width:GAME_CONFIG.DESIGN_WIDTH,height:GAME_CONFIG.DESIGN_HEIGHT,min:{width:320,height:180},max:{width:1920,height:1080}},
         backgroundColor:'#0a0a12',antialias:true,
         input:{activePointers:3,touch:{capture:true}},
-        fps:{target:60}, scene:[MainGameScene],
+        fps:{target:60}, scene:[MenuScene, TutorialScene, MainGameScene],
     };
     const game = new Phaser.Game(phaserConfig);
     document.addEventListener('visibilitychange',()=>{if(document.hidden)game.scene.scenes.forEach(s=>{if(s.scene.isActive())s.scene.pause();});else game.scene.scenes.forEach(s=>{if(s.scene.isPaused())s.scene.resume();});});
