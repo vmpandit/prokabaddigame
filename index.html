@@ -1,0 +1,2282 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Pro Kabaddi Championship</title>
+
+    <!-- ============================================================
+         VERTICAL SLICE 4 — Sound + Environments + Side-Switching
+         Agent Architect: Side-switching FSM, environment state
+         Agent Physics: AI Raider, player-controlled defender
+         Agent VFX: Ancient courtyard env, torch particles
+         Agent UI/Haptics: Web Audio synthesized SFX + ambience
+         ============================================================ -->
+
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        html, body {
+            width: 100%; height: 100%; overflow: hidden; background: #0a0a12;
+            overscroll-behavior: none; touch-action: none;
+            -webkit-touch-callout: none; -webkit-user-select: none; user-select: none;
+            font-family: 'Segoe UI', system-ui, sans-serif;
+        }
+        #game-container { width: 100%; height: 100%; display: flex; align-items: center; justify-content: center; }
+
+        #loading-overlay {
+            position: fixed; inset: 0; z-index: 100;
+            display: flex; flex-direction: column; align-items: center; justify-content: center;
+            background: rgba(10,10,18,0.85); backdrop-filter: blur(12px); transition: opacity 0.6s ease;
+        }
+        #loading-overlay.hidden { opacity: 0; pointer-events: none; }
+        #loading-overlay h1 { font-size: 1.8rem; font-weight: 700; color: #f0c040; text-transform: uppercase; letter-spacing: 0.15em; margin-bottom: 1rem; text-shadow: 0 0 20px rgba(240,192,64,0.4); }
+        #loading-overlay .subtitle { font-size: 0.85rem; color: rgba(255,255,255,0.5); letter-spacing: 0.3em; text-transform: uppercase; }
+        .spinner { width: 48px; height: 48px; border: 3px solid rgba(240,192,64,0.2); border-top-color: #f0c040; border-radius: 50%; animation: spin 0.8s linear infinite; margin-bottom: 1.5rem; }
+        @keyframes spin { to { transform: rotate(360deg); } }
+
+        #hud-overlay { position: fixed; top: 0; left: 0; right: 0; z-index: 50; pointer-events: none; padding: 8px 12px; display: flex; justify-content: space-between; align-items: flex-start; }
+        .hud-panel { background: rgba(10,10,18,0.65); backdrop-filter: blur(8px); border: 1px solid rgba(240,192,64,0.15); border-radius: 8px; padding: 6px 12px; color: rgba(255,255,255,0.8); font-size: 13px; }
+        .hud-panel .label { font-size: 9px; text-transform: uppercase; letter-spacing: 0.1em; color: rgba(240,192,64,0.6); margin-bottom: 1px; }
+        .hud-panel .value { font-size: 16px; font-weight: 700; }
+        .score-raider { color: #e85030; }
+        .score-defender { color: #3090e8; }
+        #hud-center { text-align: center; min-width: 160px; }
+        #hud-timer { font-size: 22px; font-weight: 700; color: #f0c040; font-variant-numeric: tabular-nums; }
+        #hud-turn { font-size: 10px; color: rgba(255,255,255,0.4); letter-spacing: 0.15em; text-transform: uppercase; margin-top: 2px; }
+        #skill-meter-wrap { margin-top: 5px; width: 100%; height: 6px; background: rgba(255,255,255,0.08); border-radius: 3px; overflow: hidden; }
+        #skill-meter-fill { height: 100%; width: 0%; border-radius: 3px; background: linear-gradient(90deg, #f0c040, #ff6644); transition: width 0.3s ease; }
+        #skill-meter-fill.full { background: linear-gradient(90deg, #ff4422, #f0c040, #ff4422); animation: meterPulse 0.6s ease infinite; }
+        @keyframes meterPulse { 0%,100% { opacity: 1; } 50% { opacity: 0.6; } }
+        #ult-ready-badge { display: none; font-size: 9px; color: #f0c040; font-weight: 700; letter-spacing: 0.1em; margin-top: 2px; text-transform: uppercase; animation: ultBadgePulse 0.8s ease infinite; }
+        #ult-ready-badge.show { display: block; }
+        @keyframes ultBadgePulse { 0%,100% { opacity: 1; } 50% { opacity: 0.4; } }
+
+        /* ── Role Badge (Slice 4) ── */
+        #hud-role { font-size: 11px; font-weight: 700; letter-spacing: 0.12em; text-transform: uppercase; margin-top: 3px; padding: 2px 8px; border-radius: 4px; display: inline-block; }
+        #hud-role.raider { background: rgba(232,80,48,0.2); color: #e85030; }
+        #hud-role.defender { background: rgba(48,144,232,0.2); color: #3090e8; }
+
+        /* ── Sound Toggle (Slice 4) ── */
+        #sound-toggle { position: fixed; bottom: 10px; right: 10px; z-index: 55; pointer-events: auto; background: rgba(10,10,18,0.6); backdrop-filter: blur(6px); border: 1px solid rgba(240,192,64,0.2); border-radius: 6px; color: rgba(255,255,255,0.5); font-size: 11px; padding: 4px 10px; cursor: pointer; font-family: inherit; }
+        #sound-toggle:hover { color: #f0c040; border-color: rgba(240,192,64,0.4); }
+
+        /* ── Env Label (Slice 4) ── */
+        #env-label { position: fixed; bottom: 10px; left: 10px; z-index: 55; pointer-events: none; font-size: 10px; color: rgba(240,192,64,0.2); letter-spacing: 0.2em; text-transform: uppercase; }
+
+        #turn-banner { position: fixed; inset: 0; z-index: 70; display: flex; flex-direction: column; align-items: center; justify-content: center; background: rgba(10,10,18,0.75); backdrop-filter: blur(6px); opacity: 0; pointer-events: none; transition: opacity 0.4s ease; }
+        #turn-banner.show { opacity: 1; pointer-events: auto; }
+        #turn-banner h2 { font-size: 2rem; font-weight: 700; color: #f0c040; text-transform: uppercase; letter-spacing: 0.2em; }
+        #turn-banner p { font-size: 0.9rem; color: rgba(255,255,255,0.5); margin-top: 8px; }
+        #impact-flash { position: fixed; inset: 0; z-index: 60; background: white; opacity: 0; pointer-events: none; transition: opacity 0.05s ease; }
+    </style>
+</head>
+<body>
+    <div id="loading-overlay"><div class="spinner"></div><h1>Pro Kabaddi</h1><div class="subtitle">Championship</div></div>
+
+    <div id="hud-overlay">
+        <div class="hud-panel">
+            <div class="label">Raider</div>
+            <div class="value score-raider" id="hud-raider-score">0</div>
+        </div>
+        <div class="hud-panel" id="hud-center">
+            <div id="hud-timer">0:30</div>
+            <div id="hud-turn">RAID 1 — RAIDING</div>
+            <div id="hud-role" class="raider">YOU: RAIDER</div>
+            <div id="skill-meter-wrap"><div id="skill-meter-fill"></div></div>
+            <div id="ult-ready-badge">ULTIMATE READY</div>
+        </div>
+        <div class="hud-panel">
+            <div class="label">Defenders</div>
+            <div class="value score-defender" id="hud-defender-score">0</div>
+        </div>
+    </div>
+
+    <div id="turn-banner"><h2 id="banner-title">RAID BEGINS</h2><p id="banner-sub">Get ready...</p></div>
+    <div id="impact-flash"></div>
+    <button id="sound-toggle" onclick="window.SoundEngine.toggle()">Sound: OFF</button>
+    <div id="env-label">Modern Stadium</div>
+    <div id="game-container"></div>
+
+    <script src="https://cdn.jsdelivr.net/npm/phaser@3.70.0/dist/phaser.min.js"></script>
+
+    <!-- ================================================================
+         GAME CONSTANTS (Slice 4 — expanded)
+         ================================================================ -->
+    <script>
+    const GAME_CONFIG = {
+        DESIGN_WIDTH: 1280, DESIGN_HEIGHT: 720,
+        PLAYER_SPEED: 280, DEFENDER_SPEED: 180, ISO_Y_SCALE: 0.55,
+        JOYSTICK_RADIUS: 60, JOYSTICK_DEADZONE: 0.15,
+        DASH_SPEED: 650, DASH_DURATION: 180, DASH_COOLDOWN: 800,
+        TACKLE_SPEED: 500, TACKLE_DURATION: 220, TACKLE_COOLDOWN: 1200,
+        TACKLE_RANGE: 90, TAG_RANGE: 55,
+        ULT_METER_MAX: 100, ULT_GAIN_TAG: 35, ULT_GAIN_DODGE: 15, ULT_GAIN_TICK: 2,
+        ULT_DURATION: 3000, ULT_SPEED_MULT: 1.6, ULT_IFRAMES: true,
+        CANT_DURATION: 30, CANT_WARNING: 8,
+        PHASE_PRE_RAID_TIME: 2500, PHASE_RESULT_TIME: 2000, TURN_COUNT: 6,
+        HITSTOP_DURATION: 120, HITSTOP_TIMESCALE: 0.05,
+        SHAKE_INTENSITY: 0.012, SHAKE_DURATION: 200,
+        TRAIL_INTERVAL: 25,
+        HAPTIC_LIGHT: [15], HAPTIC_HEAVY: [40,30,60], HAPTIC_DASH: [10,10,10],
+        AURA_PARTICLE_COUNT: 24, AURA_RADIUS: 50,
+
+        // AI Raider (Slice 4 — Agent Physics)
+        AI_RAIDER_SPEED: 220,
+        AI_RAIDER_DASH_COOLDOWN: 1500,
+        AI_RAIDER_AGGRO: 150,        // distance at which AI raider targets a defender
+        AI_RAIDER_FLEE_RANGE: 100,   // flee from defenders within this range
+
+        // Defender Ultimate (Slice 4)
+        DEF_ULT_DURATION: 2500,
+        DEF_ULT_TACKLE_MULT: 1.5,    // wider tackle range
+        DEF_ULT_SPEED_MULT: 1.4,
+
+        COURT: {
+            WIDTH: 1100, HEIGHT: 580, CENTER_X: 640, CENTER_Y: 380,
+            MIDLINE_X: 640, BAULK_OFFSET: 180, LOBBY_WIDTH: 40,
+        },
+        COLORS: {
+            COURT_FILL: 0x1a3a2a, COURT_BORDER: 0xf0c040, MIDLINE: 0xf0c040,
+            BAULK_LINE: 0xff6644, BONUS_LINE: 0x44aaff, LOBBY: 0x0d2e1e,
+            PLAYER_BODY: 0xe85030, DEFENDER_BODY: 0x3090e8,
+            SHADOW: 0x000000, GLOW_PULSE: 0xff4422, GLOW_DEFENDER: 0x2266cc,
+            TACKLE_AIM: 0x44ccff, DASH_AIM: 0xff6644,
+            TRAIL_RAIDER: 0xff4422, TRAIL_DEFENDER: 0x3090e8, IMPACT_RING: 0xffffff,
+            AURA_AGILITY: 0x44ddff, AURA_STRENGTH: 0xff4422,
+            CANT_RING: 0xf0c040, CANT_WARNING: 0xff2200,
+            // Courtyard theme (Slice 4)
+            COURTYARD_FILL: 0x2a1f14, COURTYARD_BORDER: 0xc89040,
+            COURTYARD_LINE: 0x8b6914, COURTYARD_LOBBY: 0x1a1208,
+            TORCH_GLOW: 0xff8830,
+        },
+    };
+    window.GAME_CONFIG = GAME_CONFIG;
+
+    const GAME_PHASE = { PRE_RAID:'pre_raid', RAID_ACTIVE:'raid_active', RAID_RESULT:'raid_result', MATCH_OVER:'match_over' };
+    window.GAME_PHASE = GAME_PHASE;
+
+    const ENTITY_STATE = { IDLE:'idle', MOVING:'moving', DASHING:'dashing', TACKLING:'tackling', STUNNED:'stunned', TAGGED:'tagged', OUT:'out', ULTIMATE:'ultimate' };
+    window.ENTITY_STATE = ENTITY_STATE;
+
+    // ── Player Role (Slice 4) ──
+    const PLAYER_ROLE = { RAIDER: 'raider', DEFENDER: 'defender' };
+    window.PLAYER_ROLE = PLAYER_ROLE;
+    </script>
+
+    <!-- ================================================================
+         AGENT UI/HAPTICS — SoundEngine (Slice 4)
+         Procedural Web Audio API: cant drone, impacts, crowd, footsteps.
+         Zero external files — everything is synthesized.
+         ================================================================ -->
+    <script>
+    class SoundEngine {
+        constructor() {
+            this.ctx = null;          // AudioContext — created on first user gesture
+            this.masterGain = null;
+            this.enabled = false;
+            this.initialized = false;
+
+            // Ambient nodes
+            this.crowdNode = null;
+            this.cantNode = null;
+            this.cantGain = null;
+        }
+
+        /** Initialize AudioContext (must be called from user gesture) */
+        init() {
+            if (this.initialized) return;
+            try {
+                this.ctx = new (window.AudioContext || window.webkitAudioContext)();
+                this.masterGain = this.ctx.createGain();
+                this.masterGain.gain.value = 0.4;
+                this.masterGain.connect(this.ctx.destination);
+                this.initialized = true;
+            } catch(e) { console.warn('Web Audio not available'); }
+        }
+
+        toggle() {
+            if (!this.initialized) this.init();
+            this.enabled = !this.enabled;
+            document.getElementById('sound-toggle').textContent = `Sound: ${this.enabled ? 'ON' : 'OFF'}`;
+            if (this.enabled) {
+                if (this.ctx.state === 'suspended') this.ctx.resume();
+                this.startCrowdAmbience();
+            } else {
+                this.stopAll();
+            }
+        }
+
+        // ──────────────────────────────────────────────────
+        // CROWD AMBIENCE (Agent UI/Haptics)
+        // Brown noise filtered to sound like distant crowd murmur.
+        // ──────────────────────────────────────────────────
+        startCrowdAmbience() {
+            if (!this.enabled || !this.initialized || this.crowdNode) return;
+
+            const bufferSize = 2 * this.ctx.sampleRate;
+            const buffer = this.ctx.createBuffer(1, bufferSize, this.ctx.sampleRate);
+            const data = buffer.getChannelData(0);
+
+            // Generate brown noise
+            let lastOut = 0;
+            for (let i = 0; i < bufferSize; i++) {
+                const white = Math.random() * 2 - 1;
+                data[i] = (lastOut + (0.02 * white)) / 1.02;
+                lastOut = data[i];
+                data[i] *= 3.5;
+            }
+
+            this.crowdNode = this.ctx.createBufferSource();
+            this.crowdNode.buffer = buffer;
+            this.crowdNode.loop = true;
+
+            // Bandpass filter for crowd-like frequency range
+            const filter = this.ctx.createBiquadFilter();
+            filter.type = 'bandpass';
+            filter.frequency.value = 400;
+            filter.Q.value = 0.8;
+
+            const gain = this.ctx.createGain();
+            gain.gain.value = 0.12;
+
+            this.crowdNode.connect(filter);
+            filter.connect(gain);
+            gain.connect(this.masterGain);
+            this.crowdNode.start();
+        }
+
+        // ──────────────────────────────────────────────────
+        // CANT CHANT (Agent UI/Haptics)
+        // Low oscillating drone that pulses like "Ka-bad-di".
+        // Uses two detuned oscillators with amplitude modulation.
+        // ──────────────────────────────────────────────────
+        startCant() {
+            if (!this.enabled || !this.initialized) return;
+            this.stopCant();
+
+            // Base drone — low hum
+            const osc1 = this.ctx.createOscillator();
+            osc1.type = 'sawtooth';
+            osc1.frequency.value = 110; // Low A
+
+            const osc2 = this.ctx.createOscillator();
+            osc2.type = 'sine';
+            osc2.frequency.value = 112; // slight detune for richness
+
+            // Amplitude modulation (the "Ka-BAD-di" rhythm)
+            const lfo = this.ctx.createOscillator();
+            lfo.type = 'sine';
+            lfo.frequency.value = 2.5; // ~2.5 syllables/sec ≈ "Ka-bad-di"
+
+            const lfoGain = this.ctx.createGain();
+            lfoGain.gain.value = 0.3;
+
+            this.cantGain = this.ctx.createGain();
+            this.cantGain.gain.value = 0.08;
+
+            // Lowpass to soften
+            const lpf = this.ctx.createBiquadFilter();
+            lpf.type = 'lowpass';
+            lpf.frequency.value = 300;
+
+            lfo.connect(lfoGain);
+            lfoGain.connect(this.cantGain.gain);
+
+            osc1.connect(lpf);
+            osc2.connect(lpf);
+            lpf.connect(this.cantGain);
+            this.cantGain.connect(this.masterGain);
+
+            osc1.start(); osc2.start(); lfo.start();
+
+            this.cantNode = { osc1, osc2, lfo };
+        }
+
+        /** Adjust cant volume based on remaining breath ratio (0..1) */
+        setCantIntensity(ratio) {
+            if (!this.cantGain) return;
+            // Gets louder and more urgent as time runs out
+            const vol = 0.05 + (1 - ratio) * 0.15;
+            this.cantGain.gain.setTargetAtTime(vol, this.ctx.currentTime, 0.1);
+
+            // Speed up the LFO as breath runs out
+            if (this.cantNode && this.cantNode.lfo) {
+                const speed = 2.5 + (1 - ratio) * 3; // 2.5 → 5.5 Hz
+                this.cantNode.lfo.frequency.setTargetAtTime(speed, this.ctx.currentTime, 0.2);
+            }
+        }
+
+        stopCant() {
+            if (this.cantNode) {
+                try { this.cantNode.osc1.stop(); this.cantNode.osc2.stop(); this.cantNode.lfo.stop(); } catch(e) {}
+                this.cantNode = null; this.cantGain = null;
+            }
+        }
+
+        // ──────────────────────────────────────────────────
+        // IMPACT SFX (Agent UI/Haptics)
+        // Short percussive hit — sine burst with pitch sweep.
+        // ──────────────────────────────────────────────────
+        playImpact(intensity = 1) {
+            if (!this.enabled || !this.initialized) return;
+            const t = this.ctx.currentTime;
+
+            const osc = this.ctx.createOscillator();
+            osc.type = 'sine';
+            osc.frequency.setValueAtTime(200 * intensity, t);
+            osc.frequency.exponentialRampToValueAtTime(50, t + 0.15);
+
+            const gain = this.ctx.createGain();
+            gain.gain.setValueAtTime(0.4 * intensity, t);
+            gain.gain.exponentialRampToValueAtTime(0.001, t + 0.2);
+
+            // Noise burst layer
+            const noiseLen = 0.08;
+            const noiseBuf = this.ctx.createBuffer(1, this.ctx.sampleRate * noiseLen, this.ctx.sampleRate);
+            const nd = noiseBuf.getChannelData(0);
+            for (let i = 0; i < nd.length; i++) nd[i] = (Math.random()*2-1) * 0.5;
+            const noiseSrc = this.ctx.createBufferSource();
+            noiseSrc.buffer = noiseBuf;
+            const noiseGain = this.ctx.createGain();
+            noiseGain.gain.setValueAtTime(0.25 * intensity, t);
+            noiseGain.gain.exponentialRampToValueAtTime(0.001, t + 0.1);
+
+            osc.connect(gain); gain.connect(this.masterGain);
+            noiseSrc.connect(noiseGain); noiseGain.connect(this.masterGain);
+            osc.start(t); osc.stop(t + 0.2);
+            noiseSrc.start(t); noiseSrc.stop(t + noiseLen);
+        }
+
+        // ──────────────────────────────────────────────────
+        // DASH WHOOSH (Agent UI/Haptics)
+        // Filtered noise sweep for dash movement.
+        // ──────────────────────────────────────────────────
+        playDash() {
+            if (!this.enabled || !this.initialized) return;
+            const t = this.ctx.currentTime;
+            const len = 0.15;
+            const buf = this.ctx.createBuffer(1, this.ctx.sampleRate * len, this.ctx.sampleRate);
+            const d = buf.getChannelData(0);
+            for (let i = 0; i < d.length; i++) d[i] = (Math.random()*2-1);
+            const src = this.ctx.createBufferSource();
+            src.buffer = buf;
+
+            const bpf = this.ctx.createBiquadFilter();
+            bpf.type = 'bandpass';
+            bpf.frequency.setValueAtTime(2000, t);
+            bpf.frequency.exponentialRampToValueAtTime(500, t + len);
+            bpf.Q.value = 2;
+
+            const gain = this.ctx.createGain();
+            gain.gain.setValueAtTime(0.15, t);
+            gain.gain.exponentialRampToValueAtTime(0.001, t + len);
+
+            src.connect(bpf); bpf.connect(gain); gain.connect(this.masterGain);
+            src.start(t); src.stop(t + len);
+        }
+
+        // ──────────────────────────────────────────────────
+        // ULTIMATE ACTIVATION CHIME (Agent UI/Haptics)
+        // Rising arpeggio of sine tones.
+        // ──────────────────────────────────────────────────
+        playUltimate() {
+            if (!this.enabled || !this.initialized) return;
+            const t = this.ctx.currentTime;
+            const notes = [330, 440, 550, 660, 880]; // E4 → A5
+
+            notes.forEach((freq, i) => {
+                const osc = this.ctx.createOscillator();
+                osc.type = 'sine';
+                osc.frequency.value = freq;
+                const g = this.ctx.createGain();
+                const start = t + i * 0.06;
+                g.gain.setValueAtTime(0, start);
+                g.gain.linearRampToValueAtTime(0.12, start + 0.03);
+                g.gain.exponentialRampToValueAtTime(0.001, start + 0.3);
+                osc.connect(g); g.connect(this.masterGain);
+                osc.start(start); osc.stop(start + 0.3);
+            });
+        }
+
+        // ──────────────────────────────────────────────────
+        // TURN CHIME (Agent UI/Haptics)
+        // Two-note bell for phase transitions.
+        // ──────────────────────────────────────────────────
+        playTurnChime() {
+            if (!this.enabled || !this.initialized) return;
+            const t = this.ctx.currentTime;
+            [523, 659].forEach((freq, i) => { // C5, E5
+                const osc = this.ctx.createOscillator();
+                osc.type = 'sine'; osc.frequency.value = freq;
+                const g = this.ctx.createGain();
+                g.gain.setValueAtTime(0.15, t + i*0.12);
+                g.gain.exponentialRampToValueAtTime(0.001, t + i*0.12 + 0.4);
+                osc.connect(g); g.connect(this.masterGain);
+                osc.start(t + i*0.12); osc.stop(t + i*0.12 + 0.4);
+            });
+        }
+
+        // ──────────────────────────────────────────────────
+        // FOOTSTEP TICK (Agent UI/Haptics)
+        // Subtle click for movement feedback.
+        // ──────────────────────────────────────────────────
+        playFootstep() {
+            if (!this.enabled || !this.initialized) return;
+            const t = this.ctx.currentTime;
+            const osc = this.ctx.createOscillator();
+            osc.type = 'sine'; osc.frequency.value = 80;
+            const g = this.ctx.createGain();
+            g.gain.setValueAtTime(0.04, t);
+            g.gain.exponentialRampToValueAtTime(0.001, t+0.04);
+            osc.connect(g); g.connect(this.masterGain);
+            osc.start(t); osc.stop(t+0.04);
+        }
+
+        stopAll() {
+            this.stopCant();
+            if (this.crowdNode) { try { this.crowdNode.stop(); } catch(e) {} this.crowdNode = null; }
+        }
+    }
+    window.SoundEngine = new SoundEngine();
+    </script>
+
+    <!-- ================================================================
+         AGENT UI/HAPTICS — HapticsManager
+         ================================================================ -->
+    <script>
+    class HapticsManager {
+        constructor() { this.supported = !!(navigator && navigator.vibrate); }
+        light()    { if (this.supported) navigator.vibrate(GAME_CONFIG.HAPTIC_LIGHT); }
+        heavy()    { if (this.supported) navigator.vibrate(GAME_CONFIG.HAPTIC_HEAVY); }
+        dash()     { if (this.supported) navigator.vibrate(GAME_CONFIG.HAPTIC_DASH); }
+        ultimate() { if (this.supported) navigator.vibrate([30,20,30,20,60]); }
+    }
+    window.HapticsManager = new HapticsManager();
+    </script>
+
+    <!-- ================================================================
+         AGENT VFX — VFXManager (Slice 4 — + torch particles, env art)
+         ================================================================ -->
+    <script>
+    class VFXManager {
+        constructor(scene) {
+            this.scene = scene;
+            this.hitStopActive = false;
+            this.flashEl = document.getElementById('impact-flash');
+            this.auraParticles = [];
+            this.auraActive = false;
+            this.auraPhase = 0;
+            this.torchParticles = [];
+        }
+
+        triggerHitStop(dur = GAME_CONFIG.HITSTOP_DURATION) {
+            if (this.hitStopActive) return;
+            this.hitStopActive = true;
+            this.scene.time.timeScale = GAME_CONFIG.HITSTOP_TIMESCALE;
+            this.scene.tweens.timeScale = GAME_CONFIG.HITSTOP_TIMESCALE;
+            setTimeout(() => { this.scene.time.timeScale=1; this.scene.tweens.timeScale=1; this.hitStopActive=false; }, dur);
+        }
+        triggerShake(i=GAME_CONFIG.SHAKE_INTENSITY,d=GAME_CONFIG.SHAKE_DURATION) { this.scene.cameras.main.shake(d,i); }
+        triggerFlash(d=80) {
+            if(!this.flashEl) return;
+            this.flashEl.style.opacity='0.5';
+            this.flashEl.style.background = 'radial-gradient(circle, rgba(255,255,255,0.8) 0%, rgba(255,255,255,0) 70%)';
+            setTimeout(()=>{this.flashEl.style.opacity='0';},d);
+        }
+
+        // ══════════════════════════════════════════════════
+        // UPGRADED IMPACT RING — Layered with glow core
+        // ══════════════════════════════════════════════════
+        spawnImpactRing(x,y,color=GAME_CONFIG.COLORS.IMPACT_RING) {
+            // Layer 1: Outer soft glow ring
+            const glowRing = this.scene.add.graphics().setDepth(49);
+            let gr = 8, ga = 0.5;
+            this.scene.time.addEvent({delay:16,repeat:20,callback:()=>{
+                glowRing.clear(); gr+=5; ga-=0.025;
+                if(ga<=0){glowRing.destroy();return;}
+                glowRing.lineStyle(6,color,ga*0.3);
+                glowRing.strokeEllipse(x,y,gr*2,gr*0.7);
+            }});
+
+            // Layer 2: Sharp inner ring
+            const ring = this.scene.add.graphics().setDepth(50);
+            let r = 5, a = 1.0;
+            this.scene.time.addEvent({delay:16,repeat:18,callback:()=>{
+                ring.clear(); r+=4; a-=0.055;
+                if(a<=0){ring.destroy();return;}
+                ring.lineStyle(2.5,color,a);
+                ring.strokeEllipse(x,y,r*2,r*0.7);
+                // Inner bright core
+                ring.lineStyle(1,0xffffff,a*0.6);
+                ring.strokeEllipse(x,y,r*1.4,r*0.5);
+            }});
+
+            // Layer 3: Central flash dot
+            const dot = this.scene.add.graphics().setDepth(51);
+            dot.fillStyle(0xffffff, 0.9);
+            dot.fillCircle(x, y, 8);
+            dot.fillStyle(color, 0.4);
+            dot.fillCircle(x, y, 14);
+            this.scene.tweens.add({targets:dot, alpha:0, duration:200, ease:'Quad.easeOut', onComplete:()=>dot.destroy()});
+        }
+
+        // ══════════════════════════════════════════════════
+        // DIRECTIONAL TRAIL — Dash = stretched diamond, Tackle = arc wedge
+        // ══════════════════════════════════════════════════
+        spawnTrailStamp(x, y, color, dirX = 0, dirY = 0, isDash = true) {
+            const s = this.scene.add.graphics().setDepth(8);
+
+            if (isDash && (Math.abs(dirX) > 0.01 || Math.abs(dirY) > 0.01)) {
+                // Stretched diamond in movement direction
+                const len = 22, wid = 8;
+                const angle = Math.atan2(dirY, dirX);
+                const cos = Math.cos(angle), sin = Math.sin(angle);
+                const isoScale = GAME_CONFIG.ISO_Y_SCALE;
+
+                // Diamond points: front tip, left, back, right
+                const fx = x + cos * len, fy = y + sin * len * isoScale;
+                const bx = x - cos * len * 0.5, by = y - sin * len * 0.5 * isoScale;
+                const lx = x - sin * wid, ly = y + cos * wid * isoScale;
+                const rx = x + sin * wid, ry = y - cos * wid * isoScale;
+
+                // Glow layer
+                s.fillStyle(color, 0.15);
+                s.fillTriangle(fx, fy, lx - sin * 3, ly + cos * 3, rx + sin * 3, ry - cos * 3);
+                s.fillTriangle(bx, by, lx - sin * 3, ly + cos * 3, rx + sin * 3, ry - cos * 3);
+
+                // Core diamond
+                s.fillStyle(color, 0.45);
+                s.fillTriangle(fx, fy, lx, ly, rx, ry);
+                s.fillTriangle(bx, by, lx, ly, rx, ry);
+
+                // Bright center line
+                s.lineStyle(1.5, 0xffffff, 0.3);
+                s.lineBetween(bx, by, fx, fy);
+            } else {
+                // Fallback: soft elliptical stamp
+                s.fillStyle(color, 0.12);
+                s.fillEllipse(x, y, 24, 32);
+                s.fillStyle(color, 0.35);
+                s.fillEllipse(x, y, 14, 20);
+            }
+
+            this.scene.tweens.add({targets:s, alpha:0, duration:300, ease:'Quad.easeOut', onComplete:()=>s.destroy()});
+        }
+
+        // ══════════════════════════════════════════════════
+        // TACKLE ARC WEDGE — Fan-shaped sweep effect
+        // ══════════════════════════════════════════════════
+        spawnTackleArc(x, y, dirX, dirY, color = GAME_CONFIG.COLORS.TACKLE_AIM) {
+            const arc = this.scene.add.graphics().setDepth(50);
+            const angle = Math.atan2(dirY, dirX);
+            const spread = 0.6; // radians on each side
+            let radius = 20, alpha = 0.7;
+
+            this.scene.time.addEvent({delay:16, repeat:14, callback:()=>{
+                arc.clear(); radius += 6; alpha -= 0.048;
+                if (alpha <= 0) { arc.destroy(); return; }
+
+                // Draw arc wedge as filled triangle fan
+                const steps = 8;
+                for (let i = 0; i < steps; i++) {
+                    const a0 = angle - spread + (spread * 2 / steps) * i;
+                    const a1 = angle - spread + (spread * 2 / steps) * (i + 1);
+                    const iso = GAME_CONFIG.ISO_Y_SCALE;
+
+                    arc.fillStyle(color, alpha * 0.3);
+                    arc.fillTriangle(
+                        x, y,
+                        x + Math.cos(a0) * radius, y + Math.sin(a0) * radius * iso,
+                        x + Math.cos(a1) * radius, y + Math.sin(a1) * radius * iso
+                    );
+
+                    // Edge lines
+                    arc.lineStyle(1.5, color, alpha * 0.7);
+                    arc.lineBetween(
+                        x + Math.cos(a0) * radius * 0.8, y + Math.sin(a0) * radius * 0.8 * iso,
+                        x + Math.cos(a1) * radius * 0.8, y + Math.sin(a1) * radius * 0.8 * iso
+                    );
+                }
+
+                // Bright edge highlight
+                arc.lineStyle(2, 0xffffff, alpha * 0.25);
+                arc.lineBetween(
+                    x + Math.cos(angle - spread) * radius, y + Math.sin(angle - spread) * radius * iso,
+                    x + Math.cos(angle + spread) * radius, y + Math.sin(angle + spread) * radius * iso
+                );
+            }});
+        }
+
+        triggerFullImpact(x, y, color) {
+            this.triggerHitStop(); this.triggerShake(); this.triggerFlash();
+            this.spawnImpactRing(x, y, color);
+
+            // Debris particles (4-6 small shards flying outward)
+            const shardCount = 5;
+            for (let i = 0; i < shardCount; i++) {
+                const shard = this.scene.add.graphics().setDepth(51);
+                const angle = (Math.PI * 2 / shardCount) * i + Math.random() * 0.5;
+                const speed = 80 + Math.random() * 60;
+                const size = 2 + Math.random() * 3;
+                let sx = x, sy = y, sa = 0.8;
+
+                shard.fillStyle(color, sa);
+                shard.fillRect(-size/2, -size/2, size, size);
+                shard.setPosition(sx, sy);
+
+                this.scene.time.addEvent({delay:16, repeat:12, callback:()=>{
+                    sx += Math.cos(angle) * speed * 0.016;
+                    sy += Math.sin(angle) * speed * 0.016 * GAME_CONFIG.ISO_Y_SCALE;
+                    sa -= 0.065;
+                    if (sa <= 0) { shard.destroy(); return; }
+                    shard.clear();
+                    shard.fillStyle(color, sa);
+                    shard.fillRect(-size/2, -size/2, size, size);
+                    shard.fillStyle(0xffffff, sa * 0.4);
+                    shard.fillRect(-size/4, -size/4, size/2, size/2);
+                    shard.setPosition(sx, sy);
+                }});
+            }
+
+            window.HapticsManager.heavy();
+            window.SoundEngine.playImpact(1.2);
+        }
+
+        // ── Aura System (upgraded with inner/outer layers) ──
+        startAura(x, y, color) {
+            this.stopAura(); this.auraActive = true; this.auraPhase = 0;
+            const count = GAME_CONFIG.AURA_PARTICLE_COUNT;
+            for (let i = 0; i < count; i++) {
+                const p = this.scene.add.graphics().setDepth(9);
+                const isInner = i < count / 2;
+                this.auraParticles.push({
+                    gfx: p,
+                    angle: (Math.PI * 2 / count) * i,
+                    radiusOffset: isInner ? Math.random() * 6 : 8 + Math.random() * 12,
+                    speedMult: isInner ? 1.2 + Math.random() * 0.4 : 0.6 + Math.random() * 0.5,
+                    size: isInner ? 1.5 + Math.random() * 2 : 2.5 + Math.random() * 3.5,
+                    color, isInner
+                });
+            }
+            this.triggerFlash(50); this.triggerShake(0.008, 150);
+        }
+
+        updateAura(x, y, dt) {
+            if (!this.auraActive) return;
+            this.auraPhase += dt * 4;
+            this.auraParticles.forEach(p => {
+                p.gfx.clear();
+                const baseR = p.isInner ? GAME_CONFIG.AURA_RADIUS * 0.5 : GAME_CONFIG.AURA_RADIUS;
+                const r = baseR + p.radiusOffset + Math.sin(this.auraPhase * p.speedMult) * 8;
+                const a = p.angle + this.auraPhase * p.speedMult * 0.5;
+                const px = x + Math.cos(a) * r, py = y + 10 + Math.sin(a) * r * 0.4;
+                const fl = 0.4 + Math.sin(this.auraPhase * 3 + p.angle) * 0.3;
+
+                // Outer glow
+                p.gfx.fillStyle(p.color, fl * 0.12);
+                p.gfx.fillCircle(px, py, p.size * 3);
+                // Core
+                p.gfx.fillStyle(p.color, fl);
+                p.gfx.fillCircle(px, py, p.size);
+                // Hot center
+                if (p.isInner) {
+                    p.gfx.fillStyle(0xffffff, fl * 0.4);
+                    p.gfx.fillCircle(px, py, p.size * 0.5);
+                }
+            });
+        }
+
+        stopAura() { this.auraActive = false; this.auraParticles.forEach(p => p.gfx.destroy()); this.auraParticles = []; }
+
+        // ══════════════════════════════════════════════════
+        // UPGRADED ULTIMATE BURST — Shockwave + radial rays + sparkle ring
+        // ══════════════════════════════════════════════════
+        spawnUltBurst(x, y, color) {
+            // 3 staggered shockwave rings
+            for (let i = 0; i < 3; i++) {
+                const ring = this.scene.add.graphics().setDepth(50);
+                let r = 10 + i * 5, a = 0.9 - i * 0.15;
+                const delay = i * 50;
+                this.scene.time.delayedCall(delay, () => {
+                    this.scene.time.addEvent({delay:16, repeat:24, callback:()=>{
+                        ring.clear(); r += 5; a -= 0.037;
+                        if (a <= 0) { ring.destroy(); return; }
+                        // Outer glow
+                        ring.lineStyle(5 - i, color, a * 0.2);
+                        ring.strokeEllipse(x, y, r * 2 + 4, (r + 2) * 0.7);
+                        // Sharp ring
+                        ring.lineStyle(2.5 - i * 0.5, color, a);
+                        ring.strokeEllipse(x, y, r * 2, r * 0.7);
+                        // White inner ring
+                        ring.lineStyle(1, 0xffffff, a * 0.4);
+                        ring.strokeEllipse(x, y, r * 1.6, r * 0.56);
+                    }});
+                });
+            }
+
+            // Radial rays with tapered ends
+            const bg = this.scene.add.graphics().setDepth(49);
+            const rays = 16; let ba = 0.8, bl = 20;
+            this.scene.time.addEvent({delay:16, repeat:18, callback:()=>{
+                bg.clear(); bl += 5; ba -= 0.044;
+                if (ba <= 0) { bg.destroy(); return; }
+                for (let r = 0; r < rays; r++) {
+                    const an = (Math.PI * 2 / rays) * r;
+                    const iso = 0.45;
+                    // Ray body
+                    bg.lineStyle(2, color, ba * 0.6);
+                    bg.lineBetween(x + Math.cos(an) * 15, y + Math.sin(an) * 15 * iso,
+                                   x + Math.cos(an) * bl, y + Math.sin(an) * bl * iso);
+                    // Ray tip dot
+                    bg.fillStyle(0xffffff, ba * 0.3);
+                    bg.fillCircle(x + Math.cos(an) * bl, y + Math.sin(an) * bl * iso, 1.5);
+                }
+            }});
+
+            // Central flash
+            const flash = this.scene.add.graphics().setDepth(52);
+            flash.fillStyle(0xffffff, 0.7);
+            flash.fillCircle(x, y, 12);
+            flash.fillStyle(color, 0.3);
+            flash.fillCircle(x, y, 24);
+            this.scene.tweens.add({targets: flash, alpha: 0, duration: 300, onComplete:()=>flash.destroy()});
+        }
+
+        // ── Cant Ring (upgraded with glow) ──
+        drawCantRing(gfx, x, y, timeRatio, phase) {
+            gfx.clear();
+            if (timeRatio <= 0) return;
+            const segs = 16, active = Math.ceil(segs * timeRatio), br = 44;
+            const warn = timeRatio < (GAME_CONFIG.CANT_WARNING / GAME_CONFIG.CANT_DURATION);
+            const color = warn ? GAME_CONFIG.COLORS.CANT_WARNING : GAME_CONFIG.COLORS.CANT_RING;
+
+            // Ambient underglow
+            gfx.fillStyle(color, (warn ? 0.08 : 0.04) + Math.sin(phase * 3) * 0.02);
+            gfx.fillEllipse(x, y + 24, br * 2.2, br * 0.85);
+
+            for (let i = 0; i < segs; i++) {
+                if (i >= active) continue;
+                const sa = (Math.PI * 2 / segs) * i - Math.PI / 2;
+                const ea = sa + (Math.PI * 2 / segs) * 0.75;
+                const ps = 1 + Math.sin(phase * 4 + i * 0.5) * 0.08;
+                const r = br * ps, iry = r * 0.38;
+                let al = 0.55;
+                if (i / segs > timeRatio - 0.15) al = 0.2 + Math.sin(phase * 6) * 0.2;
+                if (warn) al = 0.35 + Math.sin(phase * 8) * 0.35;
+
+                for (let s = 0; s < 4; s++) {
+                    const t0 = sa + (ea - sa) * (s / 4), t1 = sa + (ea - sa) * ((s + 1) / 4);
+                    // Glow layer
+                    gfx.lineStyle(warn ? 5 : 4, color, al * 0.15);
+                    gfx.lineBetween(x + Math.cos(t0) * r, y + 24 + Math.sin(t0) * iry,
+                                    x + Math.cos(t1) * r, y + 24 + Math.sin(t1) * iry);
+                    // Sharp layer
+                    gfx.lineStyle(warn ? 2.5 : 2, color, al);
+                    gfx.lineBetween(x + Math.cos(t0) * r, y + 24 + Math.sin(t0) * iry,
+                                    x + Math.cos(t1) * r, y + 24 + Math.sin(t1) * iry);
+                }
+            }
+            // Center pulse
+            const cp = 0.5 + Math.sin(phase * 5) * 0.4;
+            gfx.fillStyle(color, cp * 0.15);
+            gfx.fillCircle(x, y + 24, 8 + Math.sin(phase * 5) * 3);
+            gfx.fillStyle(color, cp * 0.4);
+            gfx.fillCircle(x, y + 24, 4 + Math.sin(phase * 5) * 2);
+        }
+
+        // ══════════════════════════════════════════════════
+        // TORCH PARTICLES (upgraded — multi-layer flame)
+        // ══════════════════════════════════════════════════
+        initTorchParticles(positions) {
+            this.destroyTorchParticles();
+            positions.forEach(pos => {
+                const gfx = this.scene.add.graphics().setDepth(3);
+                this.torchParticles.push({
+                    gfx, x: pos.x, y: pos.y,
+                    phase: Math.random() * Math.PI * 2,
+                    sparks: [{dy:0,dx:0,a:1},{dy:0,dx:0,a:1},{dy:0,dx:0,a:1}]
+                });
+            });
+        }
+
+        updateTorchParticles(dt) {
+            this.torchParticles.forEach(t => {
+                t.phase += dt * (5 + Math.random());
+                t.gfx.clear();
+
+                const flicker = 0.5 + Math.sin(t.phase) * 0.3;
+
+                // Ground glow (ambient light pool)
+                t.gfx.fillStyle(GAME_CONFIG.COLORS.TORCH_GLOW, flicker * 0.06);
+                t.gfx.fillEllipse(t.x, t.y + 12, 50, 20);
+
+                // Outer glow halo
+                t.gfx.fillStyle(GAME_CONFIG.COLORS.TORCH_GLOW, flicker * 0.12);
+                t.gfx.fillCircle(t.x, t.y, 20 + Math.sin(t.phase * 0.7) * 4);
+
+                // Mid flame
+                t.gfx.fillStyle(0xffaa22, flicker * 0.7);
+                t.gfx.fillCircle(t.x, t.y - 2, 6 + Math.sin(t.phase * 1.3) * 2);
+
+                // Flame core (bright)
+                const fsize = 3.5 + Math.sin(t.phase * 1.5) * 1;
+                t.gfx.fillStyle(0xffdd66, flicker);
+                t.gfx.fillCircle(t.x, t.y - 1, fsize);
+
+                // Hot center
+                t.gfx.fillStyle(0xffffff, flicker * 0.4);
+                t.gfx.fillCircle(t.x, t.y, 2);
+
+                // Rising sparks (3 per torch, staggered)
+                t.sparks.forEach((sp, si) => {
+                    sp.dy -= dt * 25;
+                    sp.dx = Math.sin(t.phase * 2 + si * 2) * 0.5;
+                    sp.a -= dt * 0.5;
+                    if (sp.a <= 0) { sp.dy = 0; sp.dx = 0; sp.a = 0.6 + Math.random() * 0.3; }
+                    const sparkY = t.y + sp.dy;
+                    t.gfx.fillStyle(0xffcc44, sp.a * 0.6);
+                    t.gfx.fillCircle(t.x + sp.dx * 4 + si * 2 - 2, sparkY, 1.2);
+                });
+            });
+        }
+
+        destroyTorchParticles() {
+            this.torchParticles.forEach(t => t.gfx.destroy());
+            this.torchParticles = [];
+        }
+    }
+    window.VFXManager = VFXManager;
+    </script>
+
+    <!-- ================================================================
+         AGENT ARCHITECT — TurnManager (Slice 4 — side-switching)
+         ================================================================ -->
+    <script>
+    class TurnManager {
+        constructor(scene) {
+            this.scene = scene;
+            this.phase = GAME_PHASE.PRE_RAID;
+            this.currentTurn = 1;
+            this.maxTurns = GAME_CONFIG.TURN_COUNT;
+            this.cantTimeRemaining = GAME_CONFIG.CANT_DURATION;
+            this.cantTimeMax = GAME_CONFIG.CANT_DURATION;
+            this.phaseTimer = 0;
+
+            // Side-switching (Slice 4): odd turns = raider, even = defender
+            this.playerRole = PLAYER_ROLE.RAIDER;
+
+            this.timerEl = document.getElementById('hud-timer');
+            this.turnEl = document.getElementById('hud-turn');
+            this.roleEl = document.getElementById('hud-role');
+            this.bannerEl = document.getElementById('turn-banner');
+            this.bannerTitle = document.getElementById('banner-title');
+            this.bannerSub = document.getElementById('banner-sub');
+        }
+
+        /** Determine role for this turn */
+        computeRole() {
+            this.playerRole = (this.currentTurn % 2 === 1) ? PLAYER_ROLE.RAIDER : PLAYER_ROLE.DEFENDER;
+        }
+
+        startPreRaid() {
+            this.phase = GAME_PHASE.PRE_RAID;
+            this.phaseTimer = GAME_CONFIG.PHASE_PRE_RAID_TIME;
+            this.cantTimeRemaining = this.cantTimeMax;
+            this.computeRole();
+
+            const isRaider = this.playerRole === PLAYER_ROLE.RAIDER;
+            this.bannerTitle.textContent = `RAID ${this.currentTurn}`;
+            this.bannerSub.textContent = isRaider
+                ? 'You are the RAIDER — dash in, tag, survive!'
+                : 'You are a DEFENDER — surround and tackle!';
+            this.bannerEl.classList.add('show');
+
+            // Update role badge
+            this.roleEl.textContent = isRaider ? 'YOU: RAIDER' : 'YOU: DEFENDER';
+            this.roleEl.className = isRaider ? 'raider' : 'defender';
+            this.turnEl.textContent = `RAID ${this.currentTurn} / ${this.maxTurns}`;
+
+            // Environment swap (Slice 4): courtyard on even turns
+            this.scene.setEnvironment(isRaider ? 'stadium' : 'courtyard');
+
+            this.updateTimerDisplay();
+            window.SoundEngine.playTurnChime();
+        }
+
+        startRaidActive() {
+            this.phase = GAME_PHASE.RAID_ACTIVE;
+            this.bannerEl.classList.remove('show');
+            const role = this.playerRole === PLAYER_ROLE.RAIDER ? 'RAIDING' : 'DEFENDING';
+            this.turnEl.textContent = `RAID ${this.currentTurn} — ${role}`;
+
+            // Start cant drone
+            if (this.playerRole === PLAYER_ROLE.RAIDER) {
+                window.SoundEngine.startCant();
+            } else {
+                window.SoundEngine.startCant(); // cant plays for AI raider too
+            }
+        }
+
+        endRaid(reason) {
+            this.phase = GAME_PHASE.RAID_RESULT;
+            this.phaseTimer = GAME_CONFIG.PHASE_RESULT_TIME;
+            window.SoundEngine.stopCant();
+
+            let title='', sub='';
+            const isPlayerRaider = this.playerRole === PLAYER_ROLE.RAIDER;
+            if (reason==='time_up') { title='TIME UP!'; sub='Raider ran out of breath'; this.scene.defenderScore++; }
+            else if (reason==='tackled') { title='TACKLED!'; sub='Defenders bring down the raider'; }
+            else if (reason==='returned') { title='SAFE RETURN!'; sub='Raider scored this raid'; }
+
+            this.bannerTitle.textContent = title;
+            this.bannerSub.textContent = sub;
+            this.bannerEl.classList.add('show');
+            document.getElementById('hud-raider-score').textContent = this.scene.raiderScore;
+            document.getElementById('hud-defender-score').textContent = this.scene.defenderScore;
+            window.SoundEngine.playImpact(0.6);
+        }
+
+        advanceTurn() {
+            this.currentTurn++;
+            if (this.currentTurn > this.maxTurns) { this.endMatch(); }
+            else { this.scene.resetRaidPositions(); this.startPreRaid(); }
+        }
+
+        endMatch() {
+            this.phase = GAME_PHASE.MATCH_OVER;
+            const rs=this.scene.raiderScore, ds=this.scene.defenderScore;
+            this.bannerTitle.textContent = rs>ds?'RAIDER WINS!':ds>rs?'DEFENDERS WIN!':'DRAW!';
+            this.bannerSub.textContent = `Final: Raider ${rs} — ${ds} Defenders  |  Tap to restart`;
+            this.bannerEl.classList.add('show');
+        }
+
+        update(dt) {
+            if (this.phase===GAME_PHASE.PRE_RAID) { this.phaseTimer-=dt*1000; if(this.phaseTimer<=0) this.startRaidActive(); }
+            if (this.phase===GAME_PHASE.RAID_ACTIVE) {
+                this.cantTimeRemaining-=dt;
+                if(this.cantTimeRemaining<=0){this.cantTimeRemaining=0;this.endRaid('time_up');}
+                this.updateTimerDisplay();
+                // Update cant sound intensity
+                window.SoundEngine.setCantIntensity(this.cantRatio);
+            }
+            if (this.phase===GAME_PHASE.RAID_RESULT) { this.phaseTimer-=dt*1000; if(this.phaseTimer<=0) this.advanceTurn(); }
+        }
+
+        updateTimerDisplay() {
+            const t=Math.max(0,Math.ceil(this.cantTimeRemaining));
+            this.timerEl.textContent=`${Math.floor(t/60)}:${(t%60).toString().padStart(2,'0')}`;
+            this.timerEl.style.color = this.cantTimeRemaining<GAME_CONFIG.CANT_WARNING ? '#ff2200' : '#f0c040';
+        }
+
+        get cantRatio() { return this.cantTimeRemaining/this.cantTimeMax; }
+        get isRaidActive() { return this.phase===GAME_PHASE.RAID_ACTIVE; }
+        get isPlayerRaider() { return this.playerRole===PLAYER_ROLE.RAIDER; }
+        get isPlayerDefender() { return this.playerRole===PLAYER_ROLE.DEFENDER; }
+    }
+    window.TurnManager = TurnManager;
+    </script>
+
+    <!-- ================================================================
+         UltimateSystem (unchanged from Slice 3, + sound hooks)
+         ================================================================ -->
+    <script>
+    class UltimateSystem {
+        constructor(scene) { this.scene=scene; this.meter=0; this.maxMeter=GAME_CONFIG.ULT_METER_MAX; this.active=false; this.timer=0;
+            this.fillEl=document.getElementById('skill-meter-fill'); this.badgeEl=document.getElementById('ult-ready-badge'); }
+
+        addMeter(a) { if(this.active)return; this.meter=Math.min(this.meter+a,this.maxMeter); this.updateUI(); }
+
+        tryActivate() {
+            if(this.active||this.meter<this.maxMeter) return false;
+            this.active=true; this.timer=GAME_CONFIG.ULT_DURATION; this.meter=0; this.updateUI();
+            const s=this.scene, px=s.player.x, py=s.player.y;
+            const isRaider = s.turnManager.isPlayerRaider;
+            const color = isRaider ? GAME_CONFIG.COLORS.AURA_AGILITY : GAME_CONFIG.COLORS.AURA_STRENGTH;
+            s.vfx.startAura(px,py,color); s.vfx.spawnUltBurst(px,py,color);
+            window.HapticsManager.ultimate();
+            window.SoundEngine.playUltimate();
+            const label = isRaider ? 'AGILITY ESCAPE!' : 'STRENGTH HOLD!';
+            document.getElementById('hud-turn').textContent = `ULTIMATE — ${label}`;
+            return true;
+        }
+
+        update(dt) {
+            if(!this.active && this.scene.turnManager.isRaidActive) this.addMeter(GAME_CONFIG.ULT_GAIN_TICK*dt);
+            if(this.active) { this.timer-=dt*1000; if(this.timer<=0) this.deactivate();
+                this.scene.vfx.updateAura(this.scene.player.x,this.scene.player.y,dt); }
+        }
+
+        deactivate() {
+            this.active=false; this.timer=0; this.scene.vfx.stopAura();
+            this.scene.playerState=ENTITY_STATE.IDLE;
+            if(this.scene.turnManager.isRaidActive) {
+                const role=this.scene.turnManager.isPlayerRaider?'RAIDING':'DEFENDING';
+                document.getElementById('hud-turn').textContent=`RAID ${this.scene.turnManager.currentTurn} — ${role}`;
+            }
+        }
+
+        updateUI() {
+            const pct=(this.meter/this.maxMeter)*100; this.fillEl.style.width=pct+'%';
+            if(this.meter>=this.maxMeter&&!this.active){this.fillEl.classList.add('full');this.badgeEl.classList.add('show');}
+            else{this.fillEl.classList.remove('full');this.badgeEl.classList.remove('show');}
+        }
+        reset() { this.meter=0;this.active=false;this.timer=0;this.updateUI();this.scene.vfx.stopAura(); }
+    }
+    window.UltimateSystem = UltimateSystem;
+    </script>
+
+    <!-- ================================================================
+         PHASE 1 VISUAL UPGRADE — ProceduralCharacterRenderer
+         Layered body parts, bold outlines, team accents, jersey numbers.
+         Reusable class: call drawCharacter(gfx, opts) per frame or once.
+         ================================================================ -->
+    <script>
+    class ProceduralCharacterRenderer {
+        /**
+         * Draw a stylized kabaddi athlete onto a Phaser Graphics object.
+         * @param {Phaser.GameObjects.Graphics} gfx - cleared before drawing
+         * @param {object} opts
+         *   bodyColor, accentColor, outlineColor, number, isRaider,
+         *   state (ENTITY_STATE), animPhase (0..2PI), facingX (-1..1)
+         */
+        static drawCharacter(gfx, opts = {}) {
+            const {
+                bodyColor = 0xe85030,
+                accentColor = 0xcc3a20,
+                outlineColor = 0x1a1a2e,
+                jerseyColor = null,
+                number = '7',
+                isRaider = true,
+                state = 'idle',
+                animPhase = 0,
+                facingX = 0,
+                scale = 1,
+            } = opts;
+
+            gfx.clear();
+            const s = scale;
+
+            // Animation offsets
+            const isMoving = state === 'moving' || state === 'dashing' || state === 'tackling';
+            const isStunned = state === 'stunned';
+            const isDashing = state === 'dashing';
+            const isTackling = state === 'tackling';
+            const isIdle = state === 'idle';
+            const isUltimate = state === 'ultimate';
+
+            // Idle breathing (subtle scale oscillation)
+            const breathe = isIdle ? Math.sin(animPhase * 2) * 0.02 : 0;
+
+            // Bob and squash/stretch
+            const bobY = isMoving ? Math.sin(animPhase * 8) * 3 * s :
+                         isIdle ? Math.sin(animPhase * 2) * 1.2 * s : 0;
+            const squashX = isDashing ? 0.82 :
+                            isTackling ? 1.15 :
+                            isUltimate ? 1.08 + Math.sin(animPhase * 6) * 0.04 :
+                            (isMoving ? 1 + Math.sin(animPhase * 8) * 0.06 : 1 + breathe);
+            const squashY = isDashing ? 1.22 :
+                            isTackling ? 0.88 :
+                            isUltimate ? 1.04 + Math.sin(animPhase * 6) * 0.03 :
+                            (isMoving ? 1 - Math.sin(animPhase * 8) * 0.06 : 1 - breathe);
+            const leanX = facingX * (isTackling ? 6 : isMoving ? 3 : 0) * s;
+            const stunWobble = isStunned ? Math.sin(animPhase * 12) * 5 * s : 0;
+
+            const ox = leanX + stunWobble; // overall x offset
+            const oy = bobY;               // overall y offset
+
+            // ── LEGS (tapered base) ──
+            const legW = 10 * s * squashX;
+            const legH = 10 * s * squashY;
+            const legY = 18 * s + oy;
+            const legSpread = isMoving ? Math.sin(animPhase * 8) * 4 * s : 0;
+
+            // Left leg
+            gfx.fillStyle(outlineColor, 1);
+            gfx.fillRoundedRect(ox - legW - 2 - legSpread, legY - 1, legW + 2, legH + 2, 3 * s);
+            gfx.fillStyle(bodyColor, 0.85);
+            gfx.fillRoundedRect(ox - legW - legSpread, legY, legW, legH, 3 * s);
+
+            // Right leg
+            gfx.fillStyle(outlineColor, 1);
+            gfx.fillRoundedRect(ox + 0 + legSpread - 1, legY - 1, legW + 2, legH + 2, 3 * s);
+            gfx.fillStyle(bodyColor, 0.85);
+            gfx.fillRoundedRect(ox + 0 + legSpread, legY, legW, legH, 3 * s);
+
+            // ── TORSO (trapezoid — wider at shoulders) ──
+            const torsoW = 30 * s * squashX;
+            const torsoH = 28 * s * squashY;
+            const torsoY = -8 * s + oy;
+
+            // Outline
+            gfx.fillStyle(outlineColor, 1);
+            gfx.fillRoundedRect(ox - torsoW / 2 - 2, torsoY - 2, torsoW + 4, torsoH + 4, 7 * s);
+            // Main torso
+            gfx.fillStyle(bodyColor, 1);
+            gfx.fillRoundedRect(ox - torsoW / 2, torsoY, torsoW, torsoH, 6 * s);
+
+            // Jersey panel (lighter center stripe)
+            const jColor = jerseyColor || bodyColor;
+            gfx.fillStyle(jColor, 0.3);
+            gfx.fillRoundedRect(ox - 6 * s, torsoY + 4 * s, 12 * s, torsoH - 8 * s, 3 * s);
+
+            // Shoulder pads (accent)
+            const shoulderW = 34 * s * squashX;
+            const shoulderH = 8 * s;
+            const shoulderY = torsoY - 1 * s;
+            gfx.fillStyle(outlineColor, 1);
+            gfx.fillRoundedRect(ox - shoulderW / 2 - 1.5, shoulderY - 1.5, shoulderW + 3, shoulderH + 3, 3 * s);
+            gfx.fillStyle(accentColor, 1);
+            gfx.fillRoundedRect(ox - shoulderW / 2, shoulderY, shoulderW, shoulderH, 3 * s);
+            // Shoulder highlight
+            gfx.fillStyle(0xffffff, 0.12);
+            gfx.fillRoundedRect(ox - shoulderW / 2 + 2 * s, shoulderY + 1 * s, shoulderW - 4 * s, 3 * s, 2 * s);
+
+            // ── ARMS (small circles at sides) ──
+            const armY = torsoY + 12 * s + oy;
+            const armSpread = isTackling ? 12 * s : 17 * s * squashX;
+            const armSwing = isTackling ? -8 * s : // arms forward for tackle
+                             isMoving ? Math.sin(animPhase * 8) * 5 * s :
+                             isIdle ? Math.sin(animPhase * 2 + 0.5) * 1.5 * s : 0;
+            const armR = 6 * s;
+            const tackleArmFwd = isTackling ? -8 * s * Math.abs(facingX || 0.5) : 0;
+
+            // Left arm
+            const laX = ox - armSpread + tackleArmFwd;
+            const laY = armY - armSwing;
+            gfx.fillStyle(outlineColor, 1);
+            gfx.fillCircle(laX, laY, armR + 2 * s);
+            gfx.fillStyle(bodyColor, 0.9);
+            gfx.fillCircle(laX, laY, armR);
+            gfx.fillStyle(0xd4a574, 1);
+            gfx.fillCircle(laX, laY + 5 * s, 3 * s);
+
+            // Right arm
+            const raX = ox + armSpread + tackleArmFwd;
+            const raY = armY + armSwing;
+            gfx.fillStyle(outlineColor, 1);
+            gfx.fillCircle(raX, raY, armR + 2 * s);
+            gfx.fillStyle(bodyColor, 0.9);
+            gfx.fillCircle(raX, raY, armR);
+            gfx.fillStyle(0xd4a574, 1);
+            gfx.fillCircle(raX, raY + 5 * s, 3 * s);
+
+            // ── HEAD ──
+            const headR = 14 * s;
+            const headY = -24 * s + oy;
+            // Outline
+            gfx.fillStyle(outlineColor, 1);
+            gfx.fillCircle(ox, headY, headR + 2.5 * s);
+            // Skin
+            gfx.fillStyle(0xd4a574, 1);
+            gfx.fillCircle(ox, headY, headR);
+            // Hair (half-circle on top)
+            gfx.fillStyle(0x1a1a2e, 1);
+            gfx.fillRect(ox - headR, headY - headR, headR * 2, headR * 0.7);
+            // Team-colored headband
+            gfx.fillStyle(bodyColor, 0.9);
+            gfx.fillRect(ox - headR + 1, headY - headR * 0.35, headR * 2 - 2, 4 * s);
+
+            // Eyes (simple dots — look in facing direction)
+            const eyeOffX = facingX * 3 * s;
+            gfx.fillStyle(0xffffff, 0.9);
+            gfx.fillCircle(ox - 4 * s + eyeOffX, headY - 1 * s, 2.5 * s);
+            gfx.fillCircle(ox + 4 * s + eyeOffX, headY - 1 * s, 2.5 * s);
+            gfx.fillStyle(0x1a1a2e, 1);
+            gfx.fillCircle(ox - 3.5 * s + eyeOffX, headY - 1 * s, 1.2 * s);
+            gfx.fillCircle(ox + 4.5 * s + eyeOffX, headY - 1 * s, 1.2 * s);
+
+            // ── EDGE GLOW (team-colored rim light on silhouette) ──
+            const glowAlpha = isUltimate ? 0.5 + Math.sin(animPhase * 6) * 0.2 : 0.25;
+            gfx.lineStyle(isUltimate ? 2.5 : 1.5, bodyColor, glowAlpha);
+            gfx.strokeCircle(ox, headY, headR + 3 * s);
+            gfx.strokeRoundedRect(ox - torsoW / 2 - 3, torsoY - 3, torsoW + 6, torsoH + 6, 8 * s);
+
+            // ── STUN INDICATOR (spinning stars above head) ──
+            if (isStunned) {
+                const starCount = 3;
+                for (let si = 0; si < starCount; si++) {
+                    const starAngle = animPhase * 4 + (Math.PI * 2 / starCount) * si;
+                    const starR = 12 * s;
+                    const sx = ox + Math.cos(starAngle) * starR;
+                    const sy = headY - headR - 6 * s + Math.sin(starAngle) * 4 * s;
+                    const starAlpha = 0.5 + Math.sin(animPhase * 8 + si) * 0.3;
+                    gfx.fillStyle(0xf0c040, starAlpha);
+                    // 4-pointed star
+                    const ss = 2.5 * s;
+                    gfx.fillTriangle(sx, sy - ss, sx - ss * 0.4, sy, sx + ss * 0.4, sy);
+                    gfx.fillTriangle(sx, sy + ss, sx - ss * 0.4, sy, sx + ss * 0.4, sy);
+                    gfx.fillTriangle(sx - ss, sy, sx, sy - ss * 0.4, sx, sy + ss * 0.4);
+                    gfx.fillTriangle(sx + ss, sy, sx, sy - ss * 0.4, sx, sy + ss * 0.4);
+                }
+            }
+
+            // ── ULTIMATE GLOW (bright body overlay) ──
+            if (isUltimate) {
+                const ultGlow = 0.12 + Math.sin(animPhase * 6) * 0.06;
+                gfx.fillStyle(bodyColor, ultGlow);
+                gfx.fillRoundedRect(ox - torsoW / 2, torsoY, torsoW, torsoH, 6 * s);
+                gfx.fillCircle(ox, headY, headR);
+            }
+        }
+
+        /**
+         * Draw a premium shadow (multi-layer ellipse)
+         */
+        static drawShadow(gfx, x, y, intensity = 1, scale = 1) {
+            gfx.clear();
+            const layers = [
+                { rx: 30 * scale, ry: 10 * scale, a: 0.10 * intensity },
+                { rx: 22 * scale, ry: 7 * scale, a: 0.18 * intensity },
+                { rx: 14 * scale, ry: 5 * scale, a: 0.28 * intensity },
+            ];
+            layers.forEach(l => {
+                gfx.fillStyle(0x000000, l.a);
+                gfx.fillEllipse(x, y + 28, l.rx * 2, l.ry * 2);
+            });
+        }
+
+        /**
+         * Draw a pulsing glow ring beneath an entity
+         */
+        static drawGlowRing(gfx, x, y, phase, color = 0xff4422, intensity = 1) {
+            gfx.clear();
+            const ps = 1 + Math.sin(phase) * 0.15;
+            const pa = (0.18 + Math.sin(phase) * 0.08) * intensity;
+            // Outer ring
+            gfx.lineStyle(2.5, color, pa * 0.4);
+            gfx.strokeEllipse(x, y + 28, 56 * ps, 20 * ps);
+            // Inner ring
+            gfx.lineStyle(1.5, color, pa * 0.8);
+            gfx.strokeEllipse(x, y + 28, 40 * ps, 14 * ps);
+            // Center dot
+            gfx.fillStyle(color, pa * 1.5);
+            gfx.fillCircle(x, y + 28, 3.5 * ps);
+            // Ambient glow
+            gfx.fillStyle(color, pa * 0.08);
+            gfx.fillCircle(x, y + 28, 28 * ps);
+        }
+    }
+    window.ProceduralCharacterRenderer = ProceduralCharacterRenderer;
+    </script>
+
+    <!-- ================================================================
+         PHASE 1 VISUAL UPGRADE — PremiumCourtRenderer
+         Gradient fills, zone coloring, glowing double-stroke lines,
+         vignette overlay, surface texture patterns.
+         ================================================================ -->
+    <script>
+    class PremiumCourtRenderer {
+        /**
+         * Draw the full court onto a Phaser Graphics object.
+         * @param {Phaser.GameObjects.Graphics} gfx
+         * @param {string} env - 'stadium' or 'courtyard'
+         * @param {number} time - game time for animated elements
+         */
+        static drawCourt(gfx, env = 'stadium', time = 0) {
+            const { COURT, COLORS } = GAME_CONFIG;
+            const cx = COURT.CENTER_X, cy = COURT.CENTER_Y;
+            const hw = COURT.WIDTH / 2, hh = COURT.HEIGHT / 2;
+            const isCY = env === 'courtyard';
+
+            gfx.clear();
+
+            // ── Background fill ──
+            gfx.fillStyle(isCY ? 0x080603 : 0x080b12, 1);
+            gfx.fillRect(0, 0, GAME_CONFIG.DESIGN_WIDTH, GAME_CONFIG.DESIGN_HEIGHT);
+
+            // ── Ambient glow behind court ──
+            const ambientColor = isCY ? 0x3a2a14 : 0x0a2030;
+            gfx.fillStyle(ambientColor, 0.25);
+            gfx.fillEllipse(cx, cy, COURT.WIDTH + 100, COURT.HEIGHT + 80);
+            gfx.fillStyle(ambientColor, 0.12);
+            gfx.fillEllipse(cx, cy, COURT.WIDTH + 200, COURT.HEIGHT + 160);
+
+            // ── Lobby (outer border area) ──
+            const lw = COURT.LOBBY_WIDTH;
+            gfx.fillStyle(isCY ? COLORS.COURTYARD_LOBBY : COLORS.LOBBY, 1);
+            gfx.fillRoundedRect(cx - hw - lw, cy - hh - lw, COURT.WIDTH + lw * 2, COURT.HEIGHT + lw * 2, isCY ? 4 : 12);
+
+            // ── Court surface ──
+            gfx.fillStyle(isCY ? COLORS.COURTYARD_FILL : COLORS.COURT_FILL, 1);
+            gfx.fillRoundedRect(cx - hw, cy - hh, COURT.WIDTH, COURT.HEIGHT, isCY ? 2 : 8);
+
+            // ── Zone coloring (raider half vs defender half) ──
+            // Left half (raider territory) — slightly lighter
+            gfx.fillStyle(isCY ? 0x2a2014 : 0x1a4030, 0.35);
+            gfx.fillRect(cx - hw, cy - hh, hw, COURT.HEIGHT);
+            // Right half (defender territory) — slightly different tint
+            gfx.fillStyle(isCY ? 0x201a12 : 0x142a3a, 0.35);
+            gfx.fillRect(cx, cy - hh, hw, COURT.HEIGHT);
+
+            // ── Surface texture ──
+            if (isCY) {
+                // Stone tile pattern
+                gfx.lineStyle(1, 0x3a2a18, 0.12);
+                const tileSize = 40;
+                for (let tx = cx - hw; tx < cx + hw; tx += tileSize) {
+                    gfx.lineBetween(tx, cy - hh, tx, cy + hh);
+                }
+                for (let ty = cy - hh; ty < cy + hh; ty += tileSize) {
+                    gfx.lineBetween(cx - hw, ty, cx + hw, ty);
+                }
+                // Weathering spots
+                for (let i = 0; i < 12; i++) {
+                    const sx = cx - hw + 80 + (i * 97) % COURT.WIDTH;
+                    const sy = cy - hh + 40 + (i * 73) % COURT.HEIGHT;
+                    gfx.fillStyle(0x1a1208, 0.2);
+                    gfx.fillCircle(sx, sy, 8 + (i % 3) * 4);
+                }
+            } else {
+                // Mat grain (subtle horizontal lines)
+                gfx.lineStyle(1, 0x244a38, 0.06);
+                for (let ty = cy - hh + 4; ty < cy + hh; ty += 8) {
+                    gfx.lineBetween(cx - hw, ty, cx + hw, ty);
+                }
+                // Court polish spots (circular highlights)
+                gfx.fillStyle(0x2a5a42, 0.12);
+                gfx.fillEllipse(cx - hw / 2, cy, 120, 80);
+                gfx.fillEllipse(cx + hw / 2, cy, 120, 80);
+            }
+
+            // ── Court border (double-stroke with glow) ──
+            const borderColor = isCY ? COLORS.COURTYARD_BORDER : COLORS.COURT_BORDER;
+            // Outer glow
+            gfx.lineStyle(6, borderColor, 0.08);
+            gfx.strokeRoundedRect(cx - hw - 1, cy - hh - 1, COURT.WIDTH + 2, COURT.HEIGHT + 2, isCY ? 3 : 9);
+            // Main border
+            gfx.lineStyle(isCY ? 3 : 2.5, borderColor, 0.85);
+            gfx.strokeRoundedRect(cx - hw, cy - hh, COURT.WIDTH, COURT.HEIGHT, isCY ? 2 : 8);
+            // Inner border
+            gfx.lineStyle(1, borderColor, 0.25);
+            gfx.strokeRoundedRect(cx - hw + 4, cy - hh + 4, COURT.WIDTH - 8, COURT.HEIGHT - 8, isCY ? 1 : 6);
+
+            // ── Midline (glowing center line) ──
+            const lineColor = isCY ? COLORS.COURTYARD_LINE : COLORS.MIDLINE;
+            // Midline glow
+            gfx.lineStyle(8, lineColor, 0.06);
+            gfx.lineBetween(cx, cy - hh + 2, cx, cy + hh - 2);
+            // Midline main
+            gfx.lineStyle(2.5, lineColor, 0.9);
+            gfx.lineBetween(cx, cy - hh + 2, cx, cy + hh - 2);
+            // Center circle
+            gfx.lineStyle(1.5, lineColor, 0.4);
+            gfx.strokeEllipse(cx, cy, 50, 30);
+            gfx.fillStyle(lineColor, 0.06);
+            gfx.fillEllipse(cx, cy, 50, 30);
+
+            // ── Baulk lines (glowing) ──
+            const baulkColor = isCY ? 0x8b4422 : COLORS.BAULK_LINE;
+            gfx.lineStyle(5, baulkColor, 0.05);
+            gfx.lineBetween(cx - COURT.BAULK_OFFSET, cy - hh + 2, cx - COURT.BAULK_OFFSET, cy + hh - 2);
+            gfx.lineBetween(cx + COURT.BAULK_OFFSET, cy - hh + 2, cx + COURT.BAULK_OFFSET, cy + hh - 2);
+            gfx.lineStyle(2, baulkColor, 0.7);
+            gfx.lineBetween(cx - COURT.BAULK_OFFSET, cy - hh + 2, cx - COURT.BAULK_OFFSET, cy + hh - 2);
+            gfx.lineBetween(cx + COURT.BAULK_OFFSET, cy - hh + 2, cx + COURT.BAULK_OFFSET, cy + hh - 2);
+
+            // ── Bonus lines (dashed, subtle) ──
+            const bonusColor = isCY ? 0x446688 : COLORS.BONUS_LINE;
+            gfx.lineStyle(1.5, bonusColor, 0.4);
+            const bo = COURT.BAULK_OFFSET + 80;
+            PremiumCourtRenderer._dashedLine(gfx, cx - bo, cy - hh + 10, cx - bo, cy + hh - 10, 8, 6);
+            PremiumCourtRenderer._dashedLine(gfx, cx + bo, cy - hh + 10, cx + bo, cy + hh - 10, 8, 6);
+
+            // ── Corner marks (decorative) ──
+            const csz = 22;
+            [[cx - hw + 6, cy - hh + 6], [cx + hw - 6, cy - hh + 6], [cx - hw + 6, cy + hh - 6], [cx + hw - 6, cy + hh - 6]].forEach(([x, y]) => {
+                const sx = x < cx ? 1 : -1, sy = y < cy ? 1 : -1;
+                gfx.lineStyle(2, borderColor, 0.5);
+                gfx.lineBetween(x, y, x + csz * sx, y);
+                gfx.lineBetween(x, y, x, y + csz * sy);
+                // Corner dot
+                gfx.fillStyle(borderColor, 0.3);
+                gfx.fillCircle(x, y, 3);
+            });
+
+            // ── Courtyard ornamental diamonds ──
+            if (isCY) {
+                const dSize = 12;
+                for (let dy = cy - hh + 30; dy < cy + hh - 20; dy += 50) {
+                    gfx.lineStyle(1, COLORS.COURTYARD_BORDER, 0.2);
+                    gfx.strokePoints([
+                        { x: cx, y: dy - dSize }, { x: cx + dSize, y: dy },
+                        { x: cx, y: dy + dSize }, { x: cx - dSize, y: dy },
+                        { x: cx, y: dy - dSize }
+                    ], true);
+                }
+            }
+
+            // ── Vignette overlay (darkened edges) ──
+            const vignetteW = GAME_CONFIG.DESIGN_WIDTH;
+            const vignetteH = GAME_CONFIG.DESIGN_HEIGHT;
+            // Top and bottom strips
+            gfx.fillStyle(0x000000, 0.35);
+            gfx.fillRect(0, 0, vignetteW, 40);
+            gfx.fillRect(0, vignetteH - 30, vignetteW, 30);
+            gfx.fillStyle(0x000000, 0.2);
+            gfx.fillRect(0, 40, vignetteW, 30);
+            gfx.fillRect(0, vignetteH - 60, vignetteW, 30);
+            // Side strips
+            gfx.fillStyle(0x000000, 0.15);
+            gfx.fillRect(0, 0, 30, vignetteH);
+            gfx.fillRect(vignetteW - 30, 0, 30, vignetteH);
+        }
+
+        static _dashedLine(gfx, x1, y1, x2, y2, dl, gl) {
+            const dx = x2 - x1, dy = y2 - y1, d = Math.sqrt(dx * dx + dy * dy);
+            const nx = dx / d, ny = dy / d;
+            let dr = 0, on = true;
+            while (dr < d) {
+                const s = on ? dl : gl;
+                const e = Math.min(dr + s, d);
+                if (on) gfx.lineBetween(x1 + nx * dr, y1 + ny * dr, x1 + nx * e, y1 + ny * e);
+                dr = e; on = !on;
+            }
+        }
+    }
+    window.PremiumCourtRenderer = PremiumCourtRenderer;
+    </script>
+
+    <!-- ================================================================
+         PHASE 1 VISUAL UPGRADE — AnimationSystem
+         State-based procedural animation: squash/stretch, bob, limb offsets.
+         Tracks per-entity animation phase and computes draw params.
+         ================================================================ -->
+    <script>
+    class AnimationSystem {
+        constructor() {
+            this.entities = new Map(); // id → { phase, state, facingX }
+        }
+
+        register(id) {
+            this.entities.set(id, { phase: Math.random() * Math.PI * 2, state: 'idle', facingX: 0 });
+        }
+
+        update(id, dt, state, moveVecX = 0) {
+            const e = this.entities.get(id);
+            if (!e) return;
+            e.state = state;
+            // Update facing smoothly
+            if (Math.abs(moveVecX) > 0.1) {
+                e.facingX += (Math.sign(moveVecX) - e.facingX) * Math.min(1, dt * 8);
+            }
+            // Advance animation phase
+            const speedMult = state === 'dashing' || state === 'tackling' ? 2.5 :
+                              state === 'moving' ? 1.5 : 0.5;
+            e.phase += dt * speedMult;
+        }
+
+        getParams(id) {
+            const e = this.entities.get(id);
+            if (!e) return { animPhase: 0, state: 'idle', facingX: 0 };
+            return { animPhase: e.phase, state: e.state, facingX: e.facingX };
+        }
+    }
+    window.AnimationSystem = AnimationSystem;
+    </script>
+
+    <!-- ================================================================
+         AGENT PHYSICS — MainGameScene (Slice 4 — Side-Switching)
+         Now supports: player as raider OR defender.
+         AI raider with evasion + tag behavior.
+         Environment switching (stadium ↔ courtyard).
+         ================================================================ -->
+    <script>
+    class MainGameScene extends Phaser.Scene {
+        constructor() {
+            super({ key: 'MainGameScene' });
+            this.moveVector = {x:0,y:0}; this.aimVector = {x:0,y:0};
+            this.leftJoystickActive=false; this.leftJoystickOrigin={x:0,y:0}; this.leftJoystickPointerID=null;
+            this.rightJoystickActive=false; this.rightJoystickOrigin={x:0,y:0}; this.rightJoystickPointerID=null;
+            this.wasdKeys=null; this.player=null; this.playerState=ENTITY_STATE.IDLE;
+            this.playerShadow=null; this.playerGlowRing=null; this.cantRingGfx=null;
+            this.glowPulsePhase=0; this.facingAngle=0;
+            this.dashTimer=0; this.dashCooldownTimer=0; this.dashDirection={x:0,y:0}; this.dashTrailTimer=0;
+            this.defenders=[]; this.defenderShadows=[];
+            this.raiderScore=0; this.defenderScore=0;
+            this.vfx=null; this.turnManager=null; this.ultimateSystem=null;
+            this.leftJoystickBase=null; this.leftJoystickThumb=null;
+            this.rightJoystickBase=null; this.rightJoystickThumb=null; this.aimLine=null;
+
+            // ── Slice 4: AI Raider + environment ──
+            this.aiRaider = null;           // container for AI raider (when player is defender)
+            this.aiRaiderShadow = null;
+            this.aiRaiderGlow = null;
+            this.aiRaiderState = ENTITY_STATE.IDLE;
+            this.aiRaiderDashCD = 0;
+            this.aiRaiderDashTimer = 0;
+            this.aiRaiderDashDir = {x:0,y:0};
+            this.controlledDefenderIndex = 0; // which defender the player controls
+
+            this.courtGfx = null;           // court graphics reference for env swap
+            this.currentEnv = 'stadium';
+            this.footstepTimer = 0;
+
+            // Phase 1 Visual Upgrade
+            this.animSystem = null;
+            this.playerBodyGfx = null;    // dedicated Graphics for character redraw
+            this.defenderBodyGfx = [];    // per-defender body Graphics
+            this.aiRaiderBodyGfx = null;
+        }
+
+        create() {
+            const { COURT } = GAME_CONFIG;
+            this.vfx = new VFXManager(this);
+            this.turnManager = new TurnManager(this);
+            this.ultimateSystem = new UltimateSystem(this);
+            this.animSystem = new AnimationSystem();
+
+            this.courtGfx = this.add.graphics().setDepth(0);
+            this.drawCourt('stadium');
+
+            this.spawnPlayer(COURT.CENTER_X-200, COURT.CENTER_Y);
+            this.spawnDefenders();
+            this.spawnAIRaider();
+
+            this.setupDualTouchJoysticks();
+            this.setupKeyboardInput();
+            this.createJoystickGraphics();
+            this.aimLine = this.add.graphics().setDepth(15);
+            this.cantRingGfx = this.add.graphics().setDepth(7);
+
+            // AI raider cant ring
+            this.aiCantRingGfx = this.add.graphics().setDepth(7);
+
+            this.controlsText = this.add.text(GAME_CONFIG.DESIGN_WIDTH/2, 56, '', {
+                fontFamily:'"Segoe UI", system-ui, sans-serif', fontSize:'12px',
+                color:'rgba(255,255,255,0.25)', align:'center'
+            }).setOrigin(0.5,0).setDepth(200);
+
+            this.courtBounds = new Phaser.Geom.Rectangle(
+                COURT.CENTER_X-COURT.WIDTH/2+20, COURT.CENTER_Y-COURT.HEIGHT/2+20,
+                COURT.WIDTH-40, COURT.HEIGHT-40);
+
+            document.getElementById('loading-overlay').classList.add('hidden');
+            this.turnManager.startPreRaid();
+
+            this.input.on('pointerdown', () => {
+                if (this.turnManager.phase === GAME_PHASE.MATCH_OVER) this.restartMatch();
+            });
+        }
+
+        // ════════════════════════════════════════════════════
+        // ENVIRONMENT SYSTEM (Agent VFX — Slice 4)
+        // Swaps court visuals between modern stadium & ancient courtyard
+        // ════════════════════════════════════════════════════
+        setEnvironment(env) {
+            this.currentEnv = env;
+            this.courtGfx.clear();
+            this.drawCourt(env);
+            document.getElementById('env-label').textContent = env === 'stadium' ? 'Modern Stadium' : 'Ancient Courtyard';
+
+            // Torch particles only in courtyard
+            if (env === 'courtyard') {
+                const { COURT } = GAME_CONFIG;
+                const cx=COURT.CENTER_X, cy=COURT.CENTER_Y, hw=COURT.WIDTH/2, hh=COURT.HEIGHT/2;
+                this.vfx.initTorchParticles([
+                    {x:cx-hw-20, y:cy-hh-20}, {x:cx+hw+20, y:cy-hh-20},
+                    {x:cx-hw-20, y:cy+hh+20}, {x:cx+hw+20, y:cy+hh+20},
+                    {x:cx, y:cy-hh-25}, {x:cx, y:cy+hh+25},
+                ]);
+            } else {
+                this.vfx.destroyTorchParticles();
+            }
+
+            this.updateControlsHint();
+        }
+
+        drawCourt(env) {
+            PremiumCourtRenderer.drawCourt(this.courtGfx, env);
+        }
+
+        drawDashedLine(gfx,x1,y1,x2,y2,dl,gl) {
+            PremiumCourtRenderer._dashedLine(gfx,x1,y1,x2,y2,dl,gl);
+        }
+
+        // ════════════════════════════════════════════════════
+        // ENTITY SPAWNING
+        // ════════════════════════════════════════════════════
+        spawnPlayer(x,y) {
+            this.playerShadow=this.add.graphics().setDepth(5);
+            this.playerGlowRing=this.add.graphics().setDepth(6);
+            this.player=this.add.container(x,y).setDepth(10);
+
+            // Phase 1: Procedural character body (redrawn each frame)
+            this.playerBodyGfx=this.add.graphics();
+            ProceduralCharacterRenderer.drawCharacter(this.playerBodyGfx, {
+                bodyColor: GAME_CONFIG.COLORS.PLAYER_BODY, accentColor: 0xcc3a20,
+                number: '7', isRaider: true
+            });
+            const num=this.add.text(0,6,'7',{fontFamily:'"Segoe UI",system-ui,sans-serif',fontSize:'13px',fontStyle:'bold',color:'#fff'}).setOrigin(0.5);
+            this.facingIndicator=this.add.graphics();
+            this.facingIndicator.fillStyle(0xffffff,0.7);this.facingIndicator.fillTriangle(0,-44,-5,-36,5,-36);
+            this.playerLabel=this.add.text(0,-52,'RAIDER',{fontFamily:'"Segoe UI",system-ui,sans-serif',fontSize:'9px',fontStyle:'bold',color:'#ff6644',letterSpacing:'2px'}).setOrigin(0.5);
+            this.player.add([this.playerBodyGfx,num,this.facingIndicator,this.playerLabel]);
+
+            this.animSystem.register('player');
+        }
+
+        spawnDefenders() {
+            const {COURT,COLORS}=GAME_CONFIG; const cx=COURT.CENTER_X,cy=COURT.CENTER_Y;
+            [{x:cx+160,y:cy-100,n:'2'},{x:cx+220,y:cy+20,n:'5'},{x:cx+140,y:cy+110,n:'8'}].forEach((p,i)=>{
+                const sh=this.add.graphics().setDepth(5);
+                ProceduralCharacterRenderer.drawShadow(sh,p.x,p.y,1);
+                const c=this.add.container(p.x,p.y).setDepth(10);
+
+                // Phase 1: Procedural defender body
+                const bodyGfx=this.add.graphics();
+                ProceduralCharacterRenderer.drawCharacter(bodyGfx, {
+                    bodyColor: COLORS.DEFENDER_BODY, accentColor: 0x2070c0,
+                    number: p.n, isRaider: false
+                });
+                this.defenderBodyGfx.push(bodyGfx);
+
+                const nt=this.add.text(0,6,p.n,{fontFamily:'"Segoe UI",system-ui,sans-serif',fontSize:'13px',fontStyle:'bold',color:'#fff'}).setOrigin(0.5);
+                const lb=this.add.text(0,-52,'DEF',{fontFamily:'"Segoe UI",system-ui,sans-serif',fontSize:'9px',fontStyle:'bold',color:'#44aaff',letterSpacing:'2px'}).setOrigin(0.5);
+                c.add([bodyGfx,nt,lb]);
+                this.defenders.push({container:c,shadow:sh,state:ENTITY_STATE.IDLE,homeX:p.x,homeY:p.y,
+                    tackleTimer:0,tackleCooldownTimer:0,tackleDir:{x:0,y:0},
+                    aggroRange:200+i*30,pursuitSpeed:GAME_CONFIG.DEFENDER_SPEED+i*15,stunTimer:0,bodyGfx});
+                this.defenderShadows.push(sh);
+
+                this.animSystem.register('def_'+i);
+            });
+        }
+
+        // ══════════════════════════════════════════════════
+        // AI RAIDER (Agent Physics — Slice 4)
+        // Spawned but hidden; shown when player is defender.
+        // ══════════════════════════════════════════════════
+        spawnAIRaider() {
+            const {COURT,COLORS}=GAME_CONFIG;
+            this.aiRaiderShadow=this.add.graphics().setDepth(5);
+            this.aiRaiderGlow=this.add.graphics().setDepth(6);
+            this.aiRaider=this.add.container(COURT.CENTER_X-200,COURT.CENTER_Y).setDepth(10);
+
+            // Phase 1: Procedural AI raider body
+            this.aiRaiderBodyGfx=this.add.graphics();
+            ProceduralCharacterRenderer.drawCharacter(this.aiRaiderBodyGfx, {
+                bodyColor: COLORS.PLAYER_BODY, accentColor: 0xcc3a20,
+                number: '9', isRaider: true
+            });
+            const n=this.add.text(0,6,'9',{fontFamily:'"Segoe UI",system-ui,sans-serif',fontSize:'13px',fontStyle:'bold',color:'#fff'}).setOrigin(0.5);
+            const lb=this.add.text(0,-52,'AI RAIDER',{fontFamily:'"Segoe UI",system-ui,sans-serif',fontSize:'9px',fontStyle:'bold',color:'#ff6644',letterSpacing:'2px'}).setOrigin(0.5);
+            this.aiRaider.add([this.aiRaiderBodyGfx,n,lb]);
+            this.aiRaider.setVisible(false);
+            this.aiRaiderShadow.setVisible(false);
+            this.aiRaiderGlow.setVisible(false);
+
+            this.animSystem.register('aiRaider');
+        }
+
+        drawEntityShadow(gfx,x,y,i) {
+            ProceduralCharacterRenderer.drawShadow(gfx, x, y, i);
+        }
+        drawGlowRing(gfx,x,y,phase,color=GAME_CONFIG.COLORS.GLOW_PULSE) {
+            ProceduralCharacterRenderer.drawGlowRing(gfx, x, y, phase, color);
+        }
+
+        // ════════════════════════════════════════════════════
+        // RESET / RESTART
+        // ════════════════════════════════════════════════════
+        resetRaidPositions() {
+            const {COURT}=GAME_CONFIG;
+            const isRaider = this.turnManager.isPlayerRaider;
+
+            // Player entity position depends on role
+            if (isRaider) {
+                this.player.setPosition(COURT.CENTER_X-200, COURT.CENTER_Y);
+                this.playerLabel.setText('RAIDER');
+                this.playerLabel.setColor('#ff6644');
+            } else {
+                // Player controls first defender position
+                this.player.setPosition(COURT.CENTER_X+160, COURT.CENTER_Y-100);
+                this.playerLabel.setText('YOU: DEF');
+                this.playerLabel.setColor('#44aaff');
+            }
+            this.player.setAlpha(1); this.playerState=ENTITY_STATE.IDLE;
+            this.dashTimer=0; this.dashCooldownTimer=0;
+
+            // Defenders
+            const defPos=[{x:COURT.CENTER_X+160,y:COURT.CENTER_Y-100},{x:COURT.CENTER_X+220,y:COURT.CENTER_Y+20},{x:COURT.CENTER_X+140,y:COURT.CENTER_Y+110}];
+            this.defenders.forEach((def,i)=>{
+                // If player is defender, shift AI defenders to other positions
+                const posIdx = isRaider ? i : (i < 2 ? i+1 : 0);
+                const p = defPos[posIdx % 3];
+                def.container.setPosition(p.x,p.y);def.container.setAlpha(1);def.state=ENTITY_STATE.IDLE;
+                def.tackleTimer=0;def.tackleCooldownTimer=0;def.stunTimer=0;def.homeX=p.x;def.homeY=p.y;
+                // Show/hide based on role
+                def.container.setVisible(isRaider || i > 0); // hide first defender if player controls it
+                def.shadow.setVisible(isRaider || i > 0);
+            });
+
+            // AI Raider: visible only when player is defender
+            this.aiRaider.setVisible(!isRaider);
+            this.aiRaiderShadow.setVisible(!isRaider);
+            this.aiRaiderGlow.setVisible(!isRaider);
+            if (!isRaider) {
+                this.aiRaider.setPosition(COURT.CENTER_X-200, COURT.CENTER_Y);
+                this.aiRaiderState = ENTITY_STATE.IDLE;
+                this.aiRaiderDashCD = 0;
+            }
+
+            // Hide player raider visuals when defending
+            this.player.setVisible(true);
+            this.playerShadow.setVisible(true);
+            this.playerGlowRing.setVisible(isRaider);
+
+            this.ultimateSystem.reset();
+        }
+
+        restartMatch() {
+            this.raiderScore=0;this.defenderScore=0;
+            document.getElementById('hud-raider-score').textContent='0';
+            document.getElementById('hud-defender-score').textContent='0';
+            this.turnManager.currentTurn=1;
+            this.resetRaidPositions(); this.turnManager.startPreRaid();
+        }
+
+        // ════════════════════════════════════════════════════
+        // INPUT
+        // ════════════════════════════════════════════════════
+        setupDualTouchJoysticks() {
+            const s=this;
+            this.input.on('pointerdown',(p)=>{
+                if(!this.turnManager.isRaidActive) return;
+                const sx=p.x/(this.scale.displaySize.width/GAME_CONFIG.DESIGN_WIDTH);
+                if(sx<GAME_CONFIG.DESIGN_WIDTH*0.5&&!s.leftJoystickActive){
+                    s.leftJoystickActive=true;s.leftJoystickPointerID=p.id;
+                    s.leftJoystickOrigin.x=p.x;s.leftJoystickOrigin.y=p.y;
+                    s.leftJoystickBase.setPosition(p.x,p.y).setVisible(true);
+                    s.leftJoystickThumb.setPosition(p.x,p.y).setVisible(true);
+                } else if(sx>=GAME_CONFIG.DESIGN_WIDTH*0.5&&!s.rightJoystickActive){
+                    s.rightJoystickActive=true;s.rightJoystickPointerID=p.id;
+                    s.rightJoystickOrigin.x=p.x;s.rightJoystickOrigin.y=p.y;
+                    s.rightJoystickBase.setPosition(p.x,p.y).setVisible(true);
+                    s.rightJoystickThumb.setPosition(p.x,p.y).setVisible(true);
+                }
+            });
+            this.input.on('pointermove',(p)=>{
+                if(s.leftJoystickActive&&p.id===s.leftJoystickPointerID){
+                    const r=this.computeJoystick(p,s.leftJoystickOrigin);s.leftJoystickThumb.setPosition(r.thumbX,r.thumbY);
+                    if(r.magnitude<GAME_CONFIG.JOYSTICK_DEADZONE){s.moveVector.x=0;s.moveVector.y=0;}
+                    else{s.moveVector.x=Math.cos(r.angle)*r.magnitude;s.moveVector.y=Math.sin(r.angle)*r.magnitude;}
+                }
+                if(s.rightJoystickActive&&p.id===s.rightJoystickPointerID){
+                    const r=this.computeJoystick(p,s.rightJoystickOrigin);s.rightJoystickThumb.setPosition(r.thumbX,r.thumbY);
+                    if(r.magnitude<GAME_CONFIG.JOYSTICK_DEADZONE){s.aimVector.x=0;s.aimVector.y=0;}
+                    else{s.aimVector.x=Math.cos(r.angle)*r.magnitude;s.aimVector.y=Math.sin(r.angle)*r.magnitude;}
+                }
+            });
+            const up=(p)=>{
+                if(p.id===s.leftJoystickPointerID){s.leftJoystickActive=false;s.leftJoystickPointerID=null;s.moveVector.x=0;s.moveVector.y=0;s.leftJoystickBase.setVisible(false);s.leftJoystickThumb.setVisible(false);}
+                if(p.id===s.rightJoystickPointerID){
+                    if(Math.abs(s.aimVector.x)>0.1||Math.abs(s.aimVector.y)>0.1) s.triggerAction(s.aimVector.x,s.aimVector.y);
+                    s.rightJoystickActive=false;s.rightJoystickPointerID=null;s.aimVector.x=0;s.aimVector.y=0;
+                    s.rightJoystickBase.setVisible(false);s.rightJoystickThumb.setVisible(false);if(s.aimLine)s.aimLine.clear();
+                }
+            };
+            this.input.on('pointerup',up);this.input.on('pointerupoutside',up);
+        }
+
+        computeJoystick(p,o){const dx=p.x-o.x,dy=p.y-o.y,d=Math.sqrt(dx*dx+dy*dy),m=GAME_CONFIG.JOYSTICK_RADIUS,c=Math.min(d,m),a=Math.atan2(dy,dx);return{angle:a,magnitude:c/m,thumbX:o.x+Math.cos(a)*c,thumbY:o.y+Math.sin(a)*c};}
+
+        createJoystickGraphics(){
+            const r=GAME_CONFIG.JOYSTICK_RADIUS;
+            this.leftJoystickBase=this.add.graphics().setDepth(100).setVisible(false).setScrollFactor(0);
+            this.leftJoystickBase.lineStyle(2,0xffffff,0.2);this.leftJoystickBase.strokeCircle(0,0,r);this.leftJoystickBase.fillStyle(0xffffff,0.05);this.leftJoystickBase.fillCircle(0,0,r);
+            this.leftJoystickThumb=this.add.graphics().setDepth(101).setVisible(false).setScrollFactor(0);
+            this.leftJoystickThumb.fillStyle(0xffffff,0.3);this.leftJoystickThumb.fillCircle(0,0,22);this.leftJoystickThumb.lineStyle(2,0xffffff,0.5);this.leftJoystickThumb.strokeCircle(0,0,22);
+            this.rightJoystickBase=this.add.graphics().setDepth(100).setVisible(false).setScrollFactor(0);
+            this.rightJoystickBase.lineStyle(2,0xff6644,0.25);this.rightJoystickBase.strokeCircle(0,0,r);this.rightJoystickBase.fillStyle(0xff6644,0.06);this.rightJoystickBase.fillCircle(0,0,r);
+            this.rightJoystickThumb=this.add.graphics().setDepth(101).setVisible(false).setScrollFactor(0);
+            this.rightJoystickThumb.fillStyle(0xff6644,0.35);this.rightJoystickThumb.fillCircle(0,0,20);this.rightJoystickThumb.lineStyle(2,0xff6644,0.6);this.rightJoystickThumb.strokeCircle(0,0,20);
+        }
+
+        setupKeyboardInput(){
+            this.wasdKeys=this.input.keyboard.addKeys({up:Phaser.Input.Keyboard.KeyCodes.W,down:Phaser.Input.Keyboard.KeyCodes.S,left:Phaser.Input.Keyboard.KeyCodes.A,right:Phaser.Input.Keyboard.KeyCodes.D});
+            this.input.keyboard.on('keydown-SPACE',()=>{if(!this.turnManager.isRaidActive)return;if(!this.ultimateSystem.tryActivate())this.triggerAction(Math.cos(this.facingAngle),Math.sin(this.facingAngle));});
+            this.input.keyboard.on('keydown-E',()=>{if(!this.turnManager.isRaidActive)return;this.ultimateSystem.tryActivate();});
+            this.input.on('pointerdown',(p)=>{if(!this.turnManager.isRaidActive)return;if(p.button===0&&!this.leftJoystickActive&&!this.rightJoystickActive){const w=this.cameras.main.getWorldPoint(p.x,p.y);const dx=w.x-this.player.x,dy=w.y-this.player.y,m=Math.sqrt(dx*dx+dy*dy);if(m>5)this.triggerAction(dx/m,dy/m);}});
+        }
+
+        readKeyboardInput(){
+            if(this.leftJoystickActive||!this.turnManager.isRaidActive)return;
+            let kx=0,ky=0;if(this.wasdKeys.left.isDown)kx-=1;if(this.wasdKeys.right.isDown)kx+=1;if(this.wasdKeys.up.isDown)ky-=1;if(this.wasdKeys.down.isDown)ky+=1;
+            const m=Math.sqrt(kx*kx+ky*ky);if(m>0){this.moveVector.x=kx/m;this.moveVector.y=ky/m;}else{this.moveVector.x=0;this.moveVector.y=0;}
+        }
+
+        updateControlsHint(){
+            const isRaider=this.turnManager.isPlayerRaider;
+            const action=isRaider?'Dash':'Tackle';
+            this.controlsText.setText(this.sys.game.device.input.touch
+                ? `Left: Move | Right: Aim+Release=${action} | E: Ultimate`
+                : `WASD: Move | Click: ${action} | Space: ${action}/Ult | E: Ultimate`);
+        }
+
+        // ════════════════════════════════════════════════════
+        // ACTION: Dash (raider) or Tackle (defender)
+        // Unified trigger — behavior depends on role
+        // ════════════════════════════════════════════════════
+        triggerAction(dx,dy) {
+            if(this.playerState===ENTITY_STATE.DASHING||this.playerState===ENTITY_STATE.TACKLING||this.playerState===ENTITY_STATE.STUNNED)return;
+            if(this.dashCooldownTimer>0)return;
+
+            if (this.turnManager.isPlayerRaider) {
+                // DASH
+                this.playerState=ENTITY_STATE.DASHING;
+                this.dashTimer=GAME_CONFIG.DASH_DURATION; this.dashCooldownTimer=GAME_CONFIG.DASH_COOLDOWN;
+                window.HapticsManager.dash(); window.SoundEngine.playDash();
+            } else {
+                // TACKLE LUNGE
+                this.playerState=ENTITY_STATE.TACKLING;
+                this.dashTimer=GAME_CONFIG.TACKLE_DURATION; this.dashCooldownTimer=GAME_CONFIG.TACKLE_COOLDOWN;
+                window.HapticsManager.dash(); window.SoundEngine.playDash();
+            }
+            this.dashDirection.x=dx; this.dashDirection.y=dy; this.dashTrailTimer=0;
+            // Spawn tackle arc for defender action
+            if (!this.turnManager.isPlayerRaider) {
+                this.vfx.spawnTackleArc(this.player.x, this.player.y, dx, dy, GAME_CONFIG.COLORS.TRAIL_DEFENDER);
+            }
+        }
+
+        updateAction(dt) {
+            if(this.playerState!==ENTITY_STATE.DASHING&&this.playerState!==ENTITY_STATE.TACKLING) return;
+            this.dashTimer-=dt*1000;
+            if(this.dashTimer<=0){this.playerState=ENTITY_STATE.IDLE;return;}
+
+            const isRaider=this.turnManager.isPlayerRaider;
+            const ultActive=this.ultimateSystem.active;
+            const speedBase=isRaider?GAME_CONFIG.DASH_SPEED:GAME_CONFIG.TACKLE_SPEED;
+            const speedMult=ultActive?(isRaider?GAME_CONFIG.ULT_SPEED_MULT:GAME_CONFIG.DEF_ULT_SPEED_MULT):1;
+            const speed=speedBase*speedMult;
+
+            let nx=this.player.x+this.dashDirection.x*speed*dt;
+            let ny=this.player.y+this.dashDirection.y*speed*dt*GAME_CONFIG.ISO_Y_SCALE;
+            if(this.courtBounds){nx=Phaser.Math.Clamp(nx,this.courtBounds.x,this.courtBounds.right);ny=Phaser.Math.Clamp(ny,this.courtBounds.y,this.courtBounds.bottom);}
+            this.player.setPosition(nx,ny);
+
+            // Trail
+            this.dashTrailTimer-=dt*1000;
+            if(this.dashTrailTimer<=0){
+                const c=isRaider?(ultActive?GAME_CONFIG.COLORS.AURA_AGILITY:GAME_CONFIG.COLORS.TRAIL_RAIDER):(ultActive?GAME_CONFIG.COLORS.AURA_STRENGTH:GAME_CONFIG.COLORS.TRAIL_DEFENDER);
+                this.vfx.spawnTrailStamp(nx,ny,c,this.dashDirection.x,this.dashDirection.y,isRaider);this.dashTrailTimer=GAME_CONFIG.TRAIL_INTERVAL;
+            }
+
+            // Collision check
+            if(isRaider) this.checkTagCollisions(nx,ny);
+            else this.checkPlayerTackleOnAIRaider(nx,ny);
+        }
+
+        // ════════════════════════════════════════════════════
+        // COLLISION: Raider tags defenders
+        // ════════════════════════════════════════════════════
+        checkTagCollisions(rx,ry) {
+            this.defenders.forEach(def=>{
+                if(def.state===ENTITY_STATE.TAGGED||def.state===ENTITY_STATE.STUNNED) return;
+                const dx=def.container.x-rx,dy=def.container.y-ry;
+                if(Math.sqrt(dx*dx+dy*dy)<GAME_CONFIG.TAG_RANGE) this.onDefenderTagged(def);
+            });
+        }
+
+        onDefenderTagged(def) {
+            def.state=ENTITY_STATE.TAGGED; def.stunTimer=1500;
+            this.raiderScore++; document.getElementById('hud-raider-score').textContent=this.raiderScore;
+            this.ultimateSystem.addMeter(GAME_CONFIG.ULT_GAIN_TAG);
+            const mx=(this.player.x+def.container.x)/2,my=(this.player.y+def.container.y)/2;
+            this.vfx.triggerFullImpact(mx,my,GAME_CONFIG.COLORS.TRAIL_RAIDER);
+            this.tweens.add({targets:def.container,alpha:0.3,yoyo:true,repeat:3,duration:100});
+        }
+
+        // ════════════════════════════════════════════════════
+        // COLLISION: Defender tackles raider (AI or player)
+        // ════════════════════════════════════════════════════
+        checkDefenderTackleHit(def,dx,dy) {
+            // When player is raider
+            if(this.turnManager.isPlayerRaider) {
+                if(this.playerState===ENTITY_STATE.OUT||this.playerState===ENTITY_STATE.STUNNED)return;
+                if(this.ultimateSystem.active&&GAME_CONFIG.ULT_IFRAMES){
+                    const d=Math.sqrt((this.player.x-dx)**2+(this.player.y-dy)**2);
+                    if(d<GAME_CONFIG.TAG_RANGE*1.5) this.ultimateSystem.addMeter(GAME_CONFIG.ULT_GAIN_DODGE);
+                    return;
+                }
+                if(Math.sqrt((this.player.x-dx)**2+(this.player.y-dy)**2)<GAME_CONFIG.TAG_RANGE) this.onRaiderTackled(def);
+            } else {
+                // AI raider
+                if(this.aiRaiderState===ENTITY_STATE.STUNNED||this.aiRaiderState===ENTITY_STATE.OUT) return;
+                if(Math.sqrt((this.aiRaider.x-dx)**2+(this.aiRaider.y-dy)**2)<GAME_CONFIG.TAG_RANGE) this.onAIRaiderTackled(def);
+            }
+        }
+
+        // Player tackle hits AI raider
+        checkPlayerTackleOnAIRaider(px,py) {
+            if(this.aiRaiderState===ENTITY_STATE.STUNNED||this.aiRaiderState===ENTITY_STATE.OUT) return;
+            const tackleRange = this.ultimateSystem.active ? GAME_CONFIG.TAG_RANGE * GAME_CONFIG.DEF_ULT_TACKLE_MULT : GAME_CONFIG.TAG_RANGE;
+            if(Math.sqrt((this.aiRaider.x-px)**2+(this.aiRaider.y-py)**2)<tackleRange) this.onAIRaiderTackled({container:this.player});
+        }
+
+        onRaiderTackled(def) {
+            if(this.playerState===ENTITY_STATE.OUT) return;
+            this.playerState=ENTITY_STATE.STUNNED; def.state=ENTITY_STATE.IDLE;
+            this.defenderScore++; document.getElementById('hud-defender-score').textContent=this.defenderScore;
+            const mx=(this.player.x+def.container.x)/2,my=(this.player.y+def.container.y)/2;
+            this.vfx.triggerFullImpact(mx,my,GAME_CONFIG.COLORS.TRAIL_DEFENDER);
+            this.tweens.add({targets:this.player,alpha:0.3,yoyo:true,repeat:4,duration:100,onComplete:()=>{this.playerState=ENTITY_STATE.IDLE;this.player.setAlpha(1);}});
+            this.turnManager.endRaid('tackled');
+        }
+
+        onAIRaiderTackled(tackler) {
+            if(this.aiRaiderState===ENTITY_STATE.OUT) return;
+            this.aiRaiderState=ENTITY_STATE.STUNNED;
+            this.defenderScore++; document.getElementById('hud-defender-score').textContent=this.defenderScore;
+            const mx=(this.aiRaider.x+tackler.container.x)/2,my=(this.aiRaider.y+tackler.container.y)/2;
+            this.vfx.triggerFullImpact(mx,my,GAME_CONFIG.COLORS.TRAIL_DEFENDER);
+            this.tweens.add({targets:this.aiRaider,alpha:0.3,yoyo:true,repeat:4,duration:100,onComplete:()=>{this.aiRaiderState=ENTITY_STATE.IDLE;this.aiRaider.setAlpha(1);}});
+            this.ultimateSystem.addMeter(GAME_CONFIG.ULT_GAIN_TAG); // reward tackle
+            this.turnManager.endRaid('tackled');
+        }
+
+        // ════════════════════════════════════════════════════
+        // DEFENDER AI (unchanged core, aware of raider source)
+        // ════════════════════════════════════════════════════
+        updateDefenderAI(dt) {
+            if(!this.turnManager.isRaidActive) return;
+            // Determine raider position (player or AI)
+            const raiderX = this.turnManager.isPlayerRaider ? this.player.x : this.aiRaider.x;
+            const raiderY = this.turnManager.isPlayerRaider ? this.player.y : this.aiRaider.y;
+            const raiderAlive = this.turnManager.isPlayerRaider ? (this.playerState!==ENTITY_STATE.OUT) : (this.aiRaiderState!==ENTITY_STATE.OUT);
+
+            this.defenders.forEach((def,i)=>{
+                // Skip if player controls this defender
+                if(!this.turnManager.isPlayerRaider && i===0) return;
+
+                if(def.tackleCooldownTimer>0) def.tackleCooldownTimer-=dt*1000;
+                if(def.state===ENTITY_STATE.TAGGED||def.state===ENTITY_STATE.STUNNED){
+                    def.stunTimer-=dt*1000;if(def.stunTimer<=0){def.state=ENTITY_STATE.IDLE;def.container.setAlpha(1);}
+                    this.drawEntityShadow(def.shadow,def.container.x,def.container.y,0.5);return;
+                }
+                if(def.state===ENTITY_STATE.TACKLING){
+                    def.tackleTimer-=dt*1000;if(def.tackleTimer<=0){def.state=ENTITY_STATE.IDLE;}
+                    else{
+                        let nx=def.container.x+def.tackleDir.x*GAME_CONFIG.TACKLE_SPEED*dt;
+                        let ny=def.container.y+def.tackleDir.y*GAME_CONFIG.TACKLE_SPEED*dt*GAME_CONFIG.ISO_Y_SCALE;
+                        if(this.courtBounds){nx=Phaser.Math.Clamp(nx,this.courtBounds.x,this.courtBounds.right);ny=Phaser.Math.Clamp(ny,this.courtBounds.y,this.courtBounds.bottom);}
+                        def.container.setPosition(nx,ny);
+                        this.vfx.spawnTrailStamp(nx,ny,GAME_CONFIG.COLORS.TRAIL_DEFENDER,def.tackleDir.x,def.tackleDir.y,false);
+                        this.checkDefenderTackleHit(def,nx,ny);
+                    }
+                    this.drawEntityShadow(def.shadow,def.container.x,def.container.y,1);def.container.setDepth(10+def.container.y*0.01);return;
+                }
+
+                const ddx=raiderX-def.container.x,ddy=raiderY-def.container.y;
+                const dist=Math.sqrt(ddx*ddx+ddy*ddy);
+                if(dist<def.aggroRange&&raiderAlive){
+                    def.state=ENTITY_STATE.MOVING;
+                    const ndx=ddx/dist,ndy=ddy/dist;
+                    let nx=def.container.x+ndx*def.pursuitSpeed*dt;
+                    let ny=def.container.y+ndy*def.pursuitSpeed*dt*GAME_CONFIG.ISO_Y_SCALE;
+                    if(this.courtBounds){nx=Phaser.Math.Clamp(nx,this.courtBounds.x,this.courtBounds.right);ny=Phaser.Math.Clamp(ny,this.courtBounds.y,this.courtBounds.bottom);}
+                    def.container.setPosition(nx,ny);
+                    if(dist<GAME_CONFIG.TACKLE_RANGE&&def.tackleCooldownTimer<=0){
+                        def.state=ENTITY_STATE.TACKLING;def.tackleTimer=GAME_CONFIG.TACKLE_DURATION;
+                        def.tackleCooldownTimer=GAME_CONFIG.TACKLE_COOLDOWN;def.tackleDir.x=ndx;def.tackleDir.y=ndy;
+                        this.vfx.spawnTackleArc(def.container.x,def.container.y,ndx,ndy,GAME_CONFIG.COLORS.TRAIL_DEFENDER);
+                    }
+                }else{
+                    def.state=ENTITY_STATE.IDLE;
+                    const hx=def.homeX-def.container.x,hy=def.homeY-def.container.y,hd=Math.sqrt(hx*hx+hy*hy);
+                    if(hd>5){def.container.x+=hx/hd*60*dt;def.container.y+=hy/hd*60*dt*GAME_CONFIG.ISO_Y_SCALE;}
+                }
+                this.drawEntityShadow(def.shadow,def.container.x,def.container.y,1);def.container.setDepth(10+def.container.y*0.01);
+            });
+        }
+
+        // ══════════════════════════════════════════════════
+        // AI RAIDER BEHAVIOR (Agent Physics — Slice 4)
+        // Seeks nearest untagged defender, dashes to tag, evades tackles.
+        // ══════════════════════════════════════════════════
+        updateAIRaider(dt) {
+            if(!this.turnManager.isRaidActive || this.turnManager.isPlayerRaider) return;
+            if(this.aiRaiderState===ENTITY_STATE.STUNNED||this.aiRaiderState===ENTITY_STATE.OUT) return;
+            if(this.aiRaiderDashCD>0) this.aiRaiderDashCD-=dt*1000;
+
+            // ── If currently dashing ──
+            if(this.aiRaiderState===ENTITY_STATE.DASHING) {
+                this.aiRaiderDashTimer-=dt*1000;
+                if(this.aiRaiderDashTimer<=0){this.aiRaiderState=ENTITY_STATE.MOVING;}
+                else{
+                    const s=GAME_CONFIG.DASH_SPEED;
+                    let nx=this.aiRaider.x+this.aiRaiderDashDir.x*s*dt;
+                    let ny=this.aiRaider.y+this.aiRaiderDashDir.y*s*dt*GAME_CONFIG.ISO_Y_SCALE;
+                    if(this.courtBounds){nx=Phaser.Math.Clamp(nx,this.courtBounds.x,this.courtBounds.right);ny=Phaser.Math.Clamp(ny,this.courtBounds.y,this.courtBounds.bottom);}
+                    this.aiRaider.setPosition(nx,ny);
+                    this.vfx.spawnTrailStamp(nx,ny,GAME_CONFIG.COLORS.TRAIL_RAIDER,this.aiRaiderDashDir.x,this.aiRaiderDashDir.y,true);
+
+                    // Check tag on defenders
+                    this.defenders.forEach(def=>{
+                        if(def.state===ENTITY_STATE.TAGGED||def.state===ENTITY_STATE.STUNNED)return;
+                        if(Math.sqrt((def.container.x-nx)**2+(def.container.y-ny)**2)<GAME_CONFIG.TAG_RANGE){
+                            this.onAIRaiderTagsDefender(def);
+                        }
+                    });
+                    // Check tag on player (who is a defender)
+                    if(Math.sqrt((this.player.x-nx)**2+(this.player.y-ny)**2)<GAME_CONFIG.TAG_RANGE){
+                        this.onPlayerDefenderTagged();
+                    }
+                }
+                this.drawEntityShadow(this.aiRaiderShadow,this.aiRaider.x,this.aiRaider.y,1);
+                this.aiRaider.setDepth(10+this.aiRaider.y*0.01);
+                return;
+            }
+
+            // ── Find nearest threat (defender close by) ──
+            let closestThreat=null, closestThreatDist=Infinity;
+            // Check player defender
+            const pdx=this.player.x-this.aiRaider.x, pdy=this.player.y-this.aiRaider.y;
+            const pdist=Math.sqrt(pdx*pdx+pdy*pdy);
+            if(pdist<GAME_CONFIG.AI_RAIDER_FLEE_RANGE){closestThreat={x:this.player.x,y:this.player.y};closestThreatDist=pdist;}
+
+            this.defenders.forEach(def=>{
+                if(def.state===ENTITY_STATE.TAGGED||def.state===ENTITY_STATE.STUNNED)return;
+                const dx=def.container.x-this.aiRaider.x,dy=def.container.y-this.aiRaider.y;
+                const d=Math.sqrt(dx*dx+dy*dy);
+                if(d<GAME_CONFIG.AI_RAIDER_FLEE_RANGE&&d<closestThreatDist){
+                    closestThreat={x:def.container.x,y:def.container.y};closestThreatDist=d;
+                }
+            });
+
+            // ── Find nearest target to tag ──
+            let target=null, targetDist=Infinity;
+            this.defenders.forEach(def=>{
+                if(def.state===ENTITY_STATE.TAGGED||def.state===ENTITY_STATE.STUNNED)return;
+                const dx=def.container.x-this.aiRaider.x,dy=def.container.y-this.aiRaider.y;
+                const d=Math.sqrt(dx*dx+dy*dy);
+                if(d<targetDist){target={x:def.container.x,y:def.container.y};targetDist=d;}
+            });
+            // Also consider player as target
+            if(pdist<targetDist&&this.playerState!==ENTITY_STATE.STUNNED){
+                target={x:this.player.x,y:this.player.y};targetDist=pdist;
+            }
+
+            // ── Decide movement ──
+            let moveX=0, moveY=0;
+
+            if(closestThreat && closestThreatDist < GAME_CONFIG.AI_RAIDER_FLEE_RANGE * 0.7) {
+                // EVADE: move away from nearest threat
+                const fx=this.aiRaider.x-closestThreat.x, fy=this.aiRaider.y-closestThreat.y;
+                const fd=Math.sqrt(fx*fx+fy*fy);
+                if(fd>0){moveX=fx/fd;moveY=fy/fd;}
+            } else if(target && targetDist < GAME_CONFIG.AI_RAIDER_AGGRO) {
+                // APPROACH: move toward nearest untagged defender
+                const tx=target.x-this.aiRaider.x,ty=target.y-this.aiRaider.y;
+                const td=Math.sqrt(tx*tx+ty*ty);
+                if(td>0){moveX=tx/td;moveY=ty/td;}
+
+                // DASH to tag if close and cooldown ready
+                if(targetDist<GAME_CONFIG.TACKLE_RANGE && this.aiRaiderDashCD<=0){
+                    this.aiRaiderState=ENTITY_STATE.DASHING;
+                    this.aiRaiderDashTimer=GAME_CONFIG.DASH_DURATION;
+                    this.aiRaiderDashCD=GAME_CONFIG.AI_RAIDER_DASH_COOLDOWN;
+                    this.aiRaiderDashDir.x=moveX;this.aiRaiderDashDir.y=moveY;
+                    window.SoundEngine.playDash();
+                    return;
+                }
+            } else {
+                // WANDER: drift toward right half (defender territory)
+                const wx=GAME_CONFIG.COURT.CENTER_X+100-this.aiRaider.x;
+                const wy=GAME_CONFIG.COURT.CENTER_Y-this.aiRaider.y;
+                const wd=Math.sqrt(wx*wx+wy*wy);
+                if(wd>20){moveX=wx/wd;moveY=wy/wd;}
+            }
+
+            // Apply movement
+            const spd=GAME_CONFIG.AI_RAIDER_SPEED;
+            let nx=this.aiRaider.x+moveX*spd*dt;
+            let ny=this.aiRaider.y+moveY*spd*dt*GAME_CONFIG.ISO_Y_SCALE;
+            if(this.courtBounds){nx=Phaser.Math.Clamp(nx,this.courtBounds.x,this.courtBounds.right);ny=Phaser.Math.Clamp(ny,this.courtBounds.y,this.courtBounds.bottom);}
+            this.aiRaider.setPosition(nx,ny);
+            this.aiRaiderState=ENTITY_STATE.MOVING;
+
+            this.drawEntityShadow(this.aiRaiderShadow,this.aiRaider.x,this.aiRaider.y,1);
+            this.aiRaider.setDepth(10+this.aiRaider.y*0.01);
+        }
+
+        onAIRaiderTagsDefender(def) {
+            def.state=ENTITY_STATE.TAGGED;def.stunTimer=1500;
+            this.raiderScore++;document.getElementById('hud-raider-score').textContent=this.raiderScore;
+            const mx=(this.aiRaider.x+def.container.x)/2,my=(this.aiRaider.y+def.container.y)/2;
+            this.vfx.triggerFullImpact(mx,my,GAME_CONFIG.COLORS.TRAIL_RAIDER);
+            this.tweens.add({targets:def.container,alpha:0.3,yoyo:true,repeat:3,duration:100});
+        }
+
+        onPlayerDefenderTagged() {
+            if(this.playerState===ENTITY_STATE.STUNNED||this.playerState===ENTITY_STATE.OUT) return;
+            // Invulnerability during defender ultimate
+            if(this.ultimateSystem.active) return;
+
+            this.playerState=ENTITY_STATE.STUNNED;
+            this.raiderScore++;document.getElementById('hud-raider-score').textContent=this.raiderScore;
+            const mx=(this.aiRaider.x+this.player.x)/2,my=(this.aiRaider.y+this.player.y)/2;
+            this.vfx.triggerFullImpact(mx,my,GAME_CONFIG.COLORS.TRAIL_RAIDER);
+            this.tweens.add({targets:this.player,alpha:0.3,yoyo:true,repeat:4,duration:100,onComplete:()=>{this.playerState=ENTITY_STATE.IDLE;this.player.setAlpha(1);}});
+        }
+
+        // ════════════════════════════════════════════════════
+        // AIM LINE
+        // ════════════════════════════════════════════════════
+        drawAimLine(){
+            if(!this.aimLine)return;this.aimLine.clear();if(!this.rightJoystickActive)return;
+            if(Math.abs(this.aimVector.x)<0.1&&Math.abs(this.aimVector.y)<0.1)return;
+            const px=this.player.x,py=this.player.y,len=120;
+            const ex=px+this.aimVector.x*len,ey=py+this.aimVector.y*len*GAME_CONFIG.ISO_Y_SCALE;
+            const aimColor=this.turnManager.isPlayerRaider?GAME_CONFIG.COLORS.DASH_AIM:GAME_CONFIG.COLORS.TACKLE_AIM;
+            this.aimLine.lineStyle(2,aimColor,0.5);this.drawDashedLine(this.aimLine,px,py-10,ex,ey-10,6,4);
+            const a=Math.atan2(ey-py,ex-px),al=10;this.aimLine.fillStyle(aimColor,0.6);
+            this.aimLine.fillTriangle(ex,ey-10,ex-Math.cos(a-0.4)*al,ey-10-Math.sin(a-0.4)*al,ex-Math.cos(a+0.4)*al,ey-10-Math.sin(a+0.4)*al);
+        }
+
+        // ════════════════════════════════════════════════════
+        // UPDATE LOOP
+        // ════════════════════════════════════════════════════
+        update(time,delta) {
+            if(!this.player)return;
+            const dt=delta/1000;
+
+            this.turnManager.update(dt);
+            this.ultimateSystem.update(dt);
+            if(this.dashCooldownTimer>0) this.dashCooldownTimer-=delta;
+
+            if(this.turnManager.isRaidActive) {
+                this.readKeyboardInput();
+
+                // ── Player action (dash/tackle) ──
+                if(this.playerState===ENTITY_STATE.DASHING||this.playerState===ENTITY_STATE.TACKLING){
+                    this.updateAction(dt);
+                } else if(this.playerState!==ENTITY_STATE.STUNNED&&this.playerState!==ENTITY_STATE.OUT){
+                    const ultActive=this.ultimateSystem.active;
+                    const isR=this.turnManager.isPlayerRaider;
+                    const sMult=ultActive?(isR?GAME_CONFIG.ULT_SPEED_MULT:GAME_CONFIG.DEF_ULT_SPEED_MULT):1;
+                    const speed=GAME_CONFIG.PLAYER_SPEED*sMult;
+                    let nx=this.player.x+this.moveVector.x*speed*dt;
+                    let ny=this.player.y+this.moveVector.y*speed*dt*GAME_CONFIG.ISO_Y_SCALE;
+                    if(this.courtBounds){nx=Phaser.Math.Clamp(nx,this.courtBounds.x,this.courtBounds.right);ny=Phaser.Math.Clamp(ny,this.courtBounds.y,this.courtBounds.bottom);}
+                    this.player.setPosition(nx,ny);
+                    if(Math.abs(this.moveVector.x)>0.01||Math.abs(this.moveVector.y)>0.01) this.playerState=ENTITY_STATE.MOVING;
+                    else if(this.playerState===ENTITY_STATE.MOVING) this.playerState=ENTITY_STATE.IDLE;
+                }
+
+                // Footstep sounds
+                if(this.playerState===ENTITY_STATE.MOVING){
+                    this.footstepTimer-=dt;
+                    if(this.footstepTimer<=0){window.SoundEngine.playFootstep();this.footstepTimer=0.25;}
+                }
+
+                // Facing
+                if(this.rightJoystickActive&&(Math.abs(this.aimVector.x)>0.1||Math.abs(this.aimVector.y)>0.1))
+                    this.facingAngle=Math.atan2(this.aimVector.y,this.aimVector.x);
+                else if(Math.abs(this.moveVector.x)>0.1||Math.abs(this.moveVector.y)>0.1)
+                    this.facingAngle=Math.atan2(this.moveVector.y,this.moveVector.x);
+                this.facingIndicator.setRotation(this.facingAngle+Math.PI/2);
+
+                // ── AI systems ──
+                this.updateDefenderAI(dt);
+                this.updateAIRaider(dt);
+
+                // ── Near-miss dodge meter (raider only) ──
+                if(this.turnManager.isPlayerRaider&&!this.ultimateSystem.active){
+                    this.defenders.forEach(def=>{
+                        if(def.state===ENTITY_STATE.TACKLING){
+                            const d=Math.sqrt((this.player.x-def.container.x)**2+(this.player.y-def.container.y)**2);
+                            if(d<GAME_CONFIG.TACKLE_RANGE*1.3&&d>GAME_CONFIG.TAG_RANGE) this.ultimateSystem.addMeter(GAME_CONFIG.ULT_GAIN_DODGE*dt);
+                        }
+                    });
+                }
+            }
+
+            // ── VFX + ANIMATION (always) ──
+            this.drawEntityShadow(this.playerShadow, this.player.x, this.player.y, 1);
+            this.glowPulsePhase+=dt*3.5;
+
+            // ── Phase 1: Animate & redraw characters ──
+            this.animSystem.update('player', dt, this.playerState, this.moveVector.x);
+            const pAnim = this.animSystem.getParams('player');
+            const isR = this.turnManager.isPlayerRaider;
+            ProceduralCharacterRenderer.drawCharacter(this.playerBodyGfx, {
+                bodyColor: isR ? GAME_CONFIG.COLORS.PLAYER_BODY : GAME_CONFIG.COLORS.DEFENDER_BODY,
+                accentColor: isR ? 0xcc3a20 : 0x2070c0,
+                isRaider: isR, state: pAnim.state,
+                animPhase: pAnim.animPhase, facingX: pAnim.facingX,
+            });
+
+            // Redraw defenders
+            this.defenders.forEach((def, i) => {
+                const dx = (this.turnManager.isPlayerRaider ? this.player.x : this.aiRaider.x) - def.container.x;
+                this.animSystem.update('def_'+i, dt, def.state, dx);
+                if (def.bodyGfx) {
+                    const da = this.animSystem.getParams('def_'+i);
+                    ProceduralCharacterRenderer.drawCharacter(def.bodyGfx, {
+                        bodyColor: GAME_CONFIG.COLORS.DEFENDER_BODY, accentColor: 0x2070c0,
+                        isRaider: false, state: da.state,
+                        animPhase: da.animPhase, facingX: da.facingX,
+                    });
+                }
+            });
+
+            // Redraw AI raider
+            if (this.aiRaider.visible && this.aiRaiderBodyGfx) {
+                const arMoveX = this.aiRaider.x - (this.aiRaider.getData('prevX') || this.aiRaider.x);
+                this.aiRaider.setData('prevX', this.aiRaider.x);
+                this.animSystem.update('aiRaider', dt, this.aiRaiderState, arMoveX);
+                const arAnim = this.animSystem.getParams('aiRaider');
+                ProceduralCharacterRenderer.drawCharacter(this.aiRaiderBodyGfx, {
+                    bodyColor: GAME_CONFIG.COLORS.PLAYER_BODY, accentColor: 0xcc3a20,
+                    isRaider: true, state: arAnim.state,
+                    animPhase: arAnim.animPhase, facingX: arAnim.facingX,
+                });
+            }
+
+            // Player glow
+            if(this.turnManager.isPlayerRaider || this.ultimateSystem.active) {
+                const gc=this.ultimateSystem.active?(this.turnManager.isPlayerRaider?GAME_CONFIG.COLORS.AURA_AGILITY:GAME_CONFIG.COLORS.AURA_STRENGTH):GAME_CONFIG.COLORS.GLOW_PULSE;
+                this.drawGlowRing(this.playerGlowRing,this.player.x,this.player.y,this.glowPulsePhase,gc);
+            }
+
+            // Cant ring — on whichever entity is the raider
+            if(this.turnManager.isRaidActive){
+                if(this.turnManager.isPlayerRaider){
+                    this.vfx.drawCantRing(this.cantRingGfx,this.player.x,this.player.y,this.turnManager.cantRatio,this.glowPulsePhase);
+                    this.aiCantRingGfx.clear();
+                } else {
+                    this.vfx.drawCantRing(this.aiCantRingGfx,this.aiRaider.x,this.aiRaider.y,this.turnManager.cantRatio,this.glowPulsePhase);
+                    this.cantRingGfx.clear();
+                    // AI raider glow
+                    this.drawGlowRing(this.aiRaiderGlow,this.aiRaider.x,this.aiRaider.y,this.glowPulsePhase,GAME_CONFIG.COLORS.GLOW_PULSE);
+                }
+            } else { this.cantRingGfx.clear(); this.aiCantRingGfx.clear(); }
+
+            // Torch particles (courtyard)
+            if(this.currentEnv==='courtyard') this.vfx.updateTorchParticles(dt);
+
+            this.drawAimLine();
+            this.player.setDepth(10+this.player.y*0.01);
+        }
+    }
+    window.MainGameScene = MainGameScene;
+    </script>
+
+    <!-- ════════════════════════════════════════════════════
+         PHASER BOOT
+         ════════════════════════════════════════════════════ -->
+    <script>
+    const phaserConfig = {
+        type: Phaser.WEBGL, parent:'game-container',
+        scale:{mode:Phaser.Scale.FIT,autoCenter:Phaser.Scale.CENTER_BOTH,width:GAME_CONFIG.DESIGN_WIDTH,height:GAME_CONFIG.DESIGN_HEIGHT,min:{width:320,height:180},max:{width:1920,height:1080}},
+        backgroundColor:'#0a0a12',antialias:true,
+        input:{activePointers:3,touch:{capture:true}},
+        fps:{target:60}, scene:[MainGameScene],
+    };
+    const game = new Phaser.Game(phaserConfig);
+    document.addEventListener('visibilitychange',()=>{if(document.hidden)game.scene.scenes.forEach(s=>{if(s.scene.isActive())s.scene.pause();});else game.scene.scenes.forEach(s=>{if(s.scene.isPaused())s.scene.resume();});});
+    window.addEventListener('contextmenu',e=>e.preventDefault());
+    </script>
+</body>
+</html>
