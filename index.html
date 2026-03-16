@@ -965,6 +965,11 @@
             this.roleEl.className = isRaider ? 'raider' : 'defender';
             this.turnEl.textContent = `RAID ${this.currentTurn} / ${this.maxTurns}`;
 
+            // Show/hide chain button for touch devices
+            if (this.scene._chainBtn) {
+                this.scene._chainBtn.setVisible(!isRaider && this.scene.sys.game.device.input.touch);
+            }
+
             // Environment swap for variety
             this.scene.setEnvironment(isRaider ? 'stadium' : 'courtyard');
 
@@ -995,7 +1000,12 @@
             const isPlayerRaider = this.playerRole === PLAYER_ROLE.RAIDER;
             if (reason==='time_up') { title='TIME UP!'; sub='Raider ran out of breath'; this.scene.defenderScore++; }
             else if (reason==='tackled') { title='TACKLED!'; sub='Defenders bring down the raider'; }
-            else if (reason==='returned') { title='SAFE RETURN!'; sub='Raider scored this raid'; }
+            else if (reason==='returned') {
+                // Count how many were tagged this raid
+                const tagged = this.scene.defenders.filter(d => d.state === ENTITY_STATE.TAGGED).length;
+                title = 'SAFE RETURN!';
+                sub = tagged > 0 ? `Raider tagged ${tagged} defender${tagged>1?'s':''} and escaped!` : 'Raider escaped without a touch!';
+            }
 
             this.bannerTitle.textContent = title;
             this.bannerSub.textContent = sub;
@@ -1948,7 +1958,7 @@
             }).setOrigin(0.5);
 
             // Version
-            this.add.text(W / 2, H - 20, 'v6.0 — Slice 6', {
+            this.add.text(W / 2, H - 20, 'v7.0 — Safe Return + Chain Tackle', {
                 fontFamily: '"Segoe UI", system-ui, sans-serif',
                 fontSize: '9px', color: 'rgba(240,192,64,0.15)',
             }).setOrigin(0.5);
@@ -2465,6 +2475,16 @@
             // teamMembersLost = how many of player's team lost (fewer defenders when player defends)
             this.defendersOut = [false, false, false];
             this.teamMembersLost = 0;
+
+            // Raid-return tracking
+            this.raiderCrossedBaulk = false; // has the raider entered defender territory this raid?
+            this.aiRaiderTagCount = 0;       // how many tags the AI raider got this raid
+            this.aiRaiderReturning = false;  // is AI raider heading back to safety?
+
+            // Chain tackle system
+            this.chainActive = false;
+            this.chainCooldown = 0;
+            this._chainBtn = null; // mobile chain button
         }
 
         init(data) {
@@ -2506,6 +2526,21 @@
                 fontFamily:'"Segoe UI", system-ui, sans-serif', fontSize:'12px',
                 color:'rgba(255,255,255,0.25)', align:'center'
             }).setOrigin(0.5,0).setDepth(200);
+
+            // Mobile chain tackle button (shown only when defending on touch devices)
+            this._chainBtn = this.add.container(GAME_CONFIG.DESIGN_WIDTH - 70, GAME_CONFIG.DESIGN_HEIGHT - 90).setDepth(200).setScrollFactor(0).setVisible(false);
+            const cbBg = this.add.graphics();
+            cbBg.fillStyle(0x44ddff, 0.15);
+            cbBg.fillRoundedRect(-35, -22, 70, 44, 10);
+            cbBg.lineStyle(2, 0x44ddff, 0.5);
+            cbBg.strokeRoundedRect(-35, -22, 70, 44, 10);
+            const cbTxt = this.add.text(0, 0, 'CHAIN', {
+                fontFamily:'"Segoe UI", system-ui, sans-serif', fontSize:'13px',
+                fontStyle:'bold', color:'#44ddff', align:'center'
+            }).setOrigin(0.5);
+            this._chainBtn.add([cbBg, cbTxt]);
+            this._chainBtn.setSize(70, 44).setInteractive();
+            this._chainBtn.on('pointerdown', () => { this.triggerChainTackle(); });
 
             this.courtBounds = new Phaser.Geom.Rectangle(
                 COURT.CENTER_X-COURT.WIDTH/2+20, COURT.CENTER_Y-COURT.HEIGHT/2+20,
@@ -2645,9 +2680,11 @@
                 defRing.lineStyle(2, 0x3090e8, 0.5);
                 defRing.strokeEllipse(0, 18, 36, 14);
                 c.add([defRing,bodyGfx,nt,lb]);
+                const aggro = 200+i*30, spd = GAME_CONFIG.DEFENDER_SPEED+i*15;
                 this.defenders.push({container:c,shadow:sh,state:ENTITY_STATE.IDLE,homeX:p.x,homeY:p.y,
                     tackleTimer:0,tackleCooldownTimer:0,tackleDir:{x:0,y:0},
-                    aggroRange:200+i*30,pursuitSpeed:GAME_CONFIG.DEFENDER_SPEED+i*15,stunTimer:0,bodyGfx});
+                    aggroRange:aggro,pursuitSpeed:spd,stunTimer:0,bodyGfx,
+                    _originalAggro:aggro,_originalSpeed:spd,_chainBoost:false,_chainTimer:0});
                 this.defenderShadows.push(sh);
 
                 this.animSystem.register('def_'+i);
@@ -2704,6 +2741,13 @@
             this.currentFormation = FORMATION.BOX;
             this.formationTimer = this.diffConfig.formationSwapTime;
 
+            // Reset raid-return tracking
+            this.raiderCrossedBaulk = false;
+            this.aiRaiderTagCount = 0;
+            this.aiRaiderReturning = false;
+            this.chainActive = false;
+            this.chainCooldown = 0;
+
             // ── Player position depends on role ──
             if (isRaider) {
                 this.player.setPosition(COURT.CENTER_X-200, COURT.CENTER_Y);
@@ -2730,6 +2774,7 @@
                 const p = formPos[i % formPos.length];
                 def.container.setPosition(p.x,p.y);
                 def.tackleTimer=0;def.tackleCooldownTimer=0;def.stunTimer=0;def.homeX=p.x;def.homeY=p.y;
+                def._chainBoost=false;def._chainTimer=0;def.aggroRange=def._originalAggro||200;def.pursuitSpeed=def._originalSpeed||120;def._reactionTimer=0;
 
                 if (isRaider) {
                     // Player is raiding: these are OPPONENT defenders
@@ -3044,6 +3089,7 @@
             this.wasdKeys=this.input.keyboard.addKeys({up:Phaser.Input.Keyboard.KeyCodes.W,down:Phaser.Input.Keyboard.KeyCodes.S,left:Phaser.Input.Keyboard.KeyCodes.A,right:Phaser.Input.Keyboard.KeyCodes.D});
             this.input.keyboard.on('keydown-SPACE',()=>{if(!this.turnManager.isRaidActive)return;if(!this.ultimateSystem.tryActivate())this.triggerAction(Math.cos(this.facingAngle),Math.sin(this.facingAngle));});
             this.input.keyboard.on('keydown-E',()=>{if(!this.turnManager.isRaidActive)return;this.ultimateSystem.tryActivate();});
+            this.input.keyboard.on('keydown-C',()=>{if(!this.turnManager.isRaidActive)return;this.triggerChainTackle();});
             this.input.on('pointerdown',(p)=>{if(!this.turnManager.isRaidActive)return;if((p.button===0||p.button==null)&&!this.leftJoystickActive&&!this.rightJoystickActive){const w=this.cameras.main.getWorldPoint(p.x,p.y);const dx=w.x-this.player.x,dy=w.y-this.player.y,m=Math.sqrt(dx*dx+dy*dy);if(m>5)this.triggerAction(dx/m,dy/m);}});
         }
 
@@ -3058,7 +3104,9 @@
             const action=isRaider?'Dash':'Tackle';
             this.controlsText.setText(this.sys.game.device.input.touch
                 ? `Left: Move | Right: Aim+Release=${action} | E: Ultimate`
-                : `WASD: Move | Click: ${action} | Space: ${action}/Ult | E: Ultimate`);
+                : isRaider
+                    ? `WASD: Move | Click: Dash | Space: Dash/Ult | E: Ultimate`
+                    : `WASD: Move | Click: Tackle | Space: Tackle/Ult | C: Chain | E: Ult`);
         }
 
         // ════════════════════════════════════════════════════
@@ -3189,6 +3237,97 @@
             this.ultimateSystem.addMeter(GAME_CONFIG.ULT_GAIN_TAG); // reward tackle
             if (this.comboSystem && this.turnManager.isPlayerDefender) this.comboSystem.addHit();
             this.turnManager.endRaid('tackled');
+        }
+
+        // ════════════════════════════════════════════════════
+        // SAFE RETURN DETECTION
+        // Raider crosses back to own half after entering enemy territory
+        // ════════════════════════════════════════════════════
+        _checkRaiderReturn() {
+            if (!this.turnManager.isRaidActive) return;
+            const midX = GAME_CONFIG.COURT.CENTER_X;
+
+            if (this.turnManager.isPlayerRaider) {
+                // Player is raiding — raider starts on LEFT, defender territory is RIGHT
+                // Check if raider has crossed into defender half (right of midline)
+                if (this.player.x > midX + 10) {
+                    this.raiderCrossedBaulk = true;
+                }
+                // If raider has been in enemy territory and crosses back to own half
+                if (this.raiderCrossedBaulk && this.player.x < midX - 10) {
+                    // Count how many defenders were tagged this raid
+                    const taggedCount = this.defenders.filter(d => d.state === ENTITY_STATE.TAGGED || this.defendersOut[this.defenders.indexOf(d)]).length;
+                    // Safe return! Raid ends
+                    this.turnManager.endRaid('returned');
+                }
+            } else {
+                // AI raider — same logic but checking aiRaider position
+                if (this.aiRaider.x > midX + 10) {
+                    this.raiderCrossedBaulk = true;
+                }
+                if (this.raiderCrossedBaulk && this.aiRaider.x < midX - 10) {
+                    this.turnManager.endRaid('returned');
+                }
+            }
+        }
+
+        // ════════════════════════════════════════════════════
+        // CHAIN TACKLE SYSTEM
+        // When defender calls chain, nearby AI defenders rush toward raider together
+        // ════════════════════════════════════════════════════
+        triggerChainTackle() {
+            if (this.turnManager.isPlayerRaider) return; // only defenders can chain
+            if (!this.turnManager.isRaidActive) return;
+            if (this.chainActive) return; // already active
+            if (this.chainCooldown > 0) return;
+
+            this.chainActive = true;
+            this.chainCooldown = 5000; // 5 second cooldown
+
+            // Visual + audio feedback
+            window.SoundEngine.playImpact(0.4);
+
+            // Flash "CHAIN!" text above player
+            const chainLabel = this.add.text(this.player.x, this.player.y - 70, 'CHAIN!', {
+                fontSize: '18px', fontStyle: 'bold', color: '#44ddff',
+                stroke: '#002244', strokeThickness: 4
+            }).setOrigin(0.5).setDepth(100);
+            this.tweens.add({
+                targets: chainLabel, y: chainLabel.y - 40, alpha: 0, duration: 1200,
+                ease: 'Power2', onComplete: () => chainLabel.destroy()
+            });
+
+            // Draw chain links between nearby defenders and player
+            const raiderX = this.aiRaider.x, raiderY = this.aiRaider.y;
+            this.defenders.forEach((def, i) => {
+                if (i === this.selectedDefenderIdx) return; // skip player slot
+                if (def.state === ENTITY_STATE.TAGGED || def.state === ENTITY_STATE.OUT || def.state === ENTITY_STATE.STUNNED) return;
+
+                // Boost aggro range and speed for 3 seconds
+                def._chainBoost = true;
+                def._chainTimer = 3000;
+                def.aggroRange = 600; // massively increased
+                def.pursuitSpeed = 200; // faster pursuit
+                def._reactionTimer = 9999; // skip reaction delay
+
+                // Visual: link line to player
+                const linkGfx = this.add.graphics().setDepth(50);
+                linkGfx.lineStyle(2, 0x44ddff, 0.6);
+                linkGfx.lineBetween(this.player.x, this.player.y, def.container.x, def.container.y);
+                this.tweens.add({ targets: linkGfx, alpha: 0, duration: 800, onComplete: () => linkGfx.destroy() });
+            });
+
+            // After 3 seconds, deactivate chain
+            this.time.delayedCall(3000, () => {
+                this.chainActive = false;
+                this.defenders.forEach((def, i) => {
+                    if (def._chainBoost) {
+                        def._chainBoost = false;
+                        def.aggroRange = def._originalAggro || 200;
+                        def.pursuitSpeed = def._originalSpeed || 120;
+                    }
+                });
+            });
         }
 
         // ════════════════════════════════════════════════════
@@ -3343,7 +3482,24 @@
             // ── Decide movement ──
             let moveX=0, moveY=0;
 
-            if(closestThreat && closestThreatDist < GAME_CONFIG.AI_RAIDER_FLEE_RANGE * 0.7) {
+            // RETURN MODE: AI raider tries to get back to own half after tagging
+            if (this.aiRaiderReturning) {
+                // Head toward own half (left side, past midline)
+                const homeX = GAME_CONFIG.COURT.CENTER_X - 200;
+                const homeY = GAME_CONFIG.COURT.CENTER_Y;
+                const hx = homeX - this.aiRaider.x, hy = homeY - this.aiRaider.y;
+                const hd = Math.sqrt(hx*hx + hy*hy);
+                if (hd > 5) { moveX = hx/hd; moveY = hy/hd; }
+
+                // Evade nearby defenders while returning
+                if (closestThreat && closestThreatDist < GAME_CONFIG.AI_RAIDER_FLEE_RANGE * 0.5) {
+                    const fx = this.aiRaider.x - closestThreat.x, fy = this.aiRaider.y - closestThreat.y;
+                    const fd = Math.sqrt(fx*fx + fy*fy);
+                    if (fd > 0) { moveX = (moveX + fx/fd) * 0.5; moveY = (moveY + fy/fd) * 0.5; }
+                    const nm = Math.sqrt(moveX*moveX + moveY*moveY);
+                    if (nm > 0) { moveX /= nm; moveY /= nm; }
+                }
+            } else if(closestThreat && closestThreatDist < GAME_CONFIG.AI_RAIDER_FLEE_RANGE * 0.7) {
                 // EVADE: move away from nearest threat
                 const fx=this.aiRaider.x-closestThreat.x, fy=this.aiRaider.y-closestThreat.y;
                 const fd=Math.sqrt(fx*fx+fy*fy);
@@ -3379,6 +3535,20 @@
             this.aiRaider.setPosition(nx,ny);
             this.aiRaiderState=ENTITY_STATE.MOVING;
 
+            // Proximity tag check during normal movement
+            this.defenders.forEach(def=>{
+                if(def.state===ENTITY_STATE.TAGGED||def.state===ENTITY_STATE.STUNNED)return;
+                if(Math.sqrt((def.container.x-nx)**2+(def.container.y-ny)**2)<GAME_CONFIG.TAG_RANGE){
+                    this.onAIRaiderTagsDefender(def);
+                }
+            });
+            // Check tag on player defender during normal movement
+            if(this.playerState!==ENTITY_STATE.STUNNED&&this.playerState!==ENTITY_STATE.OUT){
+                if(Math.sqrt((this.player.x-nx)**2+(this.player.y-ny)**2)<GAME_CONFIG.TAG_RANGE){
+                    this.onPlayerDefenderTagged();
+                }
+            }
+
             this.drawEntityShadow(this.aiRaiderShadow,this.aiRaider.x,this.aiRaider.y,1);
             this.aiRaider.setDepth(10+this.aiRaider.y*0.01);
         }
@@ -3386,9 +3556,14 @@
         onAIRaiderTagsDefender(def) {
             def.state=ENTITY_STATE.TAGGED;def.stunTimer=1500;
             this.raiderScore++;document.getElementById('hud-raider-score').textContent=this.raiderScore;
+            this.aiRaiderTagCount++;
             const mx=(this.aiRaider.x+def.container.x)/2,my=(this.aiRaider.y+def.container.y)/2;
             this.vfx.triggerFullImpact(mx,my,GAME_CONFIG.COLORS.TRAIL_RAIDER);
             this.tweens.add({targets:def.container,alpha:0.3,yoyo:true,repeat:3,duration:100});
+            // After tagging, AI raider has a chance to try returning
+            if (this.aiRaiderTagCount >= 1 && Math.random() < 0.5 + this.aiRaiderTagCount * 0.2) {
+                this.aiRaiderReturning = true;
+            }
         }
 
         onPlayerDefenderTagged() {
@@ -3471,9 +3646,23 @@
                     this.facingAngle=Math.atan2(this.moveVector.y,this.moveVector.x);
                 this.facingIndicator.setRotation(this.facingAngle+Math.PI/2);
 
+                // ── Proximity tag check during normal raider movement ──
+                if (this.turnManager.isPlayerRaider &&
+                    this.playerState !== ENTITY_STATE.DASHING &&
+                    this.playerState !== ENTITY_STATE.STUNNED &&
+                    this.playerState !== ENTITY_STATE.OUT) {
+                    this.checkTagCollisions(this.player.x, this.player.y);
+                }
+
                 // ── AI systems ──
                 this.updateDefenderAI(dt);
                 this.updateAIRaider(dt);
+
+                // ── Chain tackle cooldown ──
+                if (this.chainCooldown > 0) this.chainCooldown -= dt * 1000;
+
+                // ── Safe-return detection ──
+                this._checkRaiderReturn();
 
                 // ── Near-miss dodge meter (raider only) ──
                 if(this.turnManager.isPlayerRaider&&!this.ultimateSystem.active){
