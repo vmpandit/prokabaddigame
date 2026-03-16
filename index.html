@@ -163,6 +163,19 @@
     window.PLAYER_ROLE = PLAYER_ROLE;
 
     // ════════════════════════════════════════════════════
+    // SLICE 7 — Kabaddi Rules Constants
+    // ════════════════════════════════════════════════════
+    const KABADDI_RULES = {
+        BONUS_LINE_POINTS: 1,        // +1 point for crossing the bonus line
+        SUPER_RAID_MULTIPLIER: 2,    // tag points doubled during super raid
+        DO_OR_DIE_PENALTY: 1,        // points lost if do-or-die fails
+        ALL_OUT_BONUS: 2,            // bonus points for wiping all defenders
+        EMPTY_RAIDS_FOR_DOD: 2,      // consecutive empty raids before do-or-die
+        LOBBY_STUN_DURATION: 800,    // ms stun for lobby foul
+    };
+    window.KABADDI_RULES = KABADDI_RULES;
+
+    // ════════════════════════════════════════════════════
     // SLICE 5 — New Feature Constants
     // ════════════════════════════════════════════════════
 
@@ -951,7 +964,17 @@
                 // Raider turn: standard countdown then go
                 this.phaseTimer = GAME_CONFIG.PHASE_PRE_RAID_TIME;
                 this.bannerTitle.textContent = `RAID ${this.currentTurn}`;
-                this.bannerSub.textContent = 'You are the RAIDER — dash in, tag defenders, get back safe!';
+                // Super Raid / Do-or-Die annotations
+                let subText = 'You are the RAIDER — dash in, tag defenders, get back safe!';
+                if (this.scene.superRaidActive) {
+                    subText = 'SUPER RAID! Your team is undermanned — tags worth DOUBLE!';
+                    this.bannerTitle.textContent = `SUPER RAID ${this.currentTurn}`;
+                }
+                if (this.scene.doOrDieActive) {
+                    subText = 'DO-OR-DIE! You MUST score or lose a point!';
+                    this.bannerTitle.textContent = `DO-OR-DIE RAID ${this.currentTurn}`;
+                }
+                this.bannerSub.textContent = subText;
                 this.bannerEl.classList.add('show');
             } else {
                 // Defender turn: show defender pick screen, pause pre-raid timer
@@ -980,7 +1003,9 @@
         startRaidActive() {
             this.phase = GAME_PHASE.RAID_ACTIVE;
             this.bannerEl.classList.remove('show');
-            const role = this.playerRole === PLAYER_ROLE.RAIDER ? 'RAIDING' : 'DEFENDING';
+            let role = this.playerRole === PLAYER_ROLE.RAIDER ? 'RAIDING' : 'DEFENDING';
+            if (this.scene.superRaidActive) role = 'SUPER RAID';
+            if (this.scene.doOrDieActive) role = 'DO-OR-DIE';
             this.turnEl.textContent = `RAID ${this.currentTurn} — ${role}`;
 
             // Start cant drone
@@ -998,13 +1023,39 @@
 
             let title='', sub='';
             const isPlayerRaider = this.playerRole === PLAYER_ROLE.RAIDER;
-            if (reason==='time_up') { title='TIME UP!'; sub='Raider ran out of breath'; this.scene.defenderScore++; }
-            else if (reason==='tackled') { title='TACKLED!'; sub='Defenders bring down the raider'; }
+            const tagged = this.scene.defenders.filter(d => d.state === ENTITY_STATE.TAGGED).length;
+            const bonus = this.scene.bonusClaimed ? 1 : 0;
+            const superRaid = this.scene.superRaidActive;
+
+            if (reason==='time_up') {
+                title='TIME UP!'; sub='Raider ran out of breath';
+                this.scene.defenderScore++;
+                // Do-or-Die: time up also counts as failed
+                if (this.scene.doOrDieActive) {
+                    this.scene.defenderScore += KABADDI_RULES.DO_OR_DIE_PENALTY;
+                    sub += ' — Do-or-Die FAILED!';
+                }
+            }
+            else if (reason==='tackled') {
+                title='TACKLED!'; sub='Defenders bring down the raider';
+                if (this.scene.doOrDieActive) {
+                    this.scene.defenderScore += KABADDI_RULES.DO_OR_DIE_PENALTY;
+                    sub += ' — Do-or-Die FAILED!';
+                }
+            }
+            else if (reason==='dod_fail') {
+                title = 'DO-OR-DIE FAILED!';
+                sub = 'Empty return — defenders get a point!';
+            }
             else if (reason==='returned') {
-                // Count how many were tagged this raid
-                const tagged = this.scene.defenders.filter(d => d.state === ENTITY_STATE.TAGGED).length;
                 title = 'SAFE RETURN!';
-                sub = tagged > 0 ? `Raider tagged ${tagged} defender${tagged>1?'s':''} and escaped!` : 'Raider escaped without a touch!';
+                const parts = [];
+                if (tagged > 0) parts.push(`${tagged} tag${tagged>1?'s':''}`);
+                if (bonus) parts.push('bonus line');
+                if (superRaid && tagged > 0) parts.push('SUPER RAID x2');
+                sub = parts.length > 0
+                    ? `Raider scored: ${parts.join(' + ')}!`
+                    : 'Raider escaped without a touch!';
             }
 
             this.bannerTitle.textContent = title;
@@ -1947,10 +1998,37 @@
                 this.scene.start('TutorialScene');
             });
 
+            // RULES button
+            const rBtnX = W / 2, rBtnY = 505;
+            const rulesBtn = this.add.graphics();
+            rulesBtn.fillStyle(0x44aaff, 0.1);
+            rulesBtn.fillRoundedRect(rBtnX - 90, rBtnY - 18, 180, 36, 8);
+            rulesBtn.lineStyle(1.5, 0x44aaff, 0.35);
+            rulesBtn.strokeRoundedRect(rBtnX - 90, rBtnY - 18, 180, 36, 8);
+            this.add.text(rBtnX, rBtnY, 'RULES & HISTORY', {
+                fontFamily: '"Segoe UI", system-ui, sans-serif',
+                fontSize: '13px', fontStyle: 'bold',
+                color: '#44aaff', letterSpacing: '3px',
+            }).setOrigin(0.5);
+            const rulesHit = this.add.rectangle(rBtnX, rBtnY, 180, 36).setInteractive({ useHandCursor: true }).setAlpha(0.001);
+            rulesHit.on('pointerover', () => {
+                rulesBtn.clear(); rulesBtn.fillStyle(0x44aaff, 0.22);
+                rulesBtn.fillRoundedRect(rBtnX - 90, rBtnY - 18, 180, 36, 8);
+                rulesBtn.lineStyle(2, 0x44aaff, 0.6);
+                rulesBtn.strokeRoundedRect(rBtnX - 90, rBtnY - 18, 180, 36, 8);
+            });
+            rulesHit.on('pointerout', () => {
+                rulesBtn.clear(); rulesBtn.fillStyle(0x44aaff, 0.1);
+                rulesBtn.fillRoundedRect(rBtnX - 90, rBtnY - 18, 180, 36, 8);
+                rulesBtn.lineStyle(1.5, 0x44aaff, 0.35);
+                rulesBtn.strokeRoundedRect(rBtnX - 90, rBtnY - 18, 180, 36, 8);
+            });
+            rulesHit.on('pointerdown', () => { this._showRulesOverlay(); });
+
             // Features list
-            this.add.text(W / 2, 520, [
+            this.add.text(W / 2, 565, [
                 'Side-switching raids  •  Defender formations  •  Combo streaks',
-                'Ultimate abilities  •  Dynamic AI  •  Procedural sound & VFX'
+                'Ultimate abilities  •  Dynamic AI  •  Bonus line  •  Super raids'
             ].join('\n'), {
                 fontFamily: '"Segoe UI", system-ui, sans-serif',
                 fontSize: '10px', color: 'rgba(255,255,255,0.2)',
@@ -1958,7 +2036,7 @@
             }).setOrigin(0.5);
 
             // Version
-            this.add.text(W / 2, H - 20, 'v7.0 — Safe Return + Chain Tackle', {
+            this.add.text(W / 2, H - 20, 'v8.0 — Full Kabaddi Rules', {
                 fontFamily: '"Segoe UI", system-ui, sans-serif',
                 fontSize: '9px', color: 'rgba(240,192,64,0.15)',
             }).setOrigin(0.5);
@@ -1966,6 +2044,103 @@
             // Hide loading overlay
             const overlay = document.getElementById('loading-overlay');
             if (overlay) overlay.classList.add('hidden');
+        }
+
+        _showRulesOverlay() {
+            const W = GAME_CONFIG.DESIGN_WIDTH, H = GAME_CONFIG.DESIGN_HEIGHT;
+
+            // Container for the entire overlay
+            const overlay = this.add.container(0, 0).setDepth(500);
+
+            // Dark backdrop
+            const bg = this.add.graphics();
+            bg.fillStyle(0x0a0a12, 0.92);
+            bg.fillRect(0, 0, W, H);
+            overlay.add(bg);
+
+            // Scrollable panel background
+            const panelW = 700, panelH = 560;
+            const px = (W - panelW) / 2, py = (H - panelH) / 2;
+            const panel = this.add.graphics();
+            panel.fillStyle(0x141420, 1);
+            panel.fillRoundedRect(px, py, panelW, panelH, 12);
+            panel.lineStyle(2, 0xf0c040, 0.3);
+            panel.strokeRoundedRect(px, py, panelW, panelH, 12);
+            overlay.add(panel);
+
+            // Title
+            const title = this.add.text(W/2, py + 30, 'KABADDI — RULES & HISTORY', {
+                fontFamily: '"Segoe UI", system-ui, sans-serif',
+                fontSize: '20px', fontStyle: 'bold',
+                color: '#f0c040', letterSpacing: '4px',
+            }).setOrigin(0.5, 0);
+            overlay.add(title);
+
+            // History paragraph
+            const historyText = `Kabaddi is one of the oldest contact sports in the world, with roots tracing back over 4,000 years to ancient India. The name comes from the Tamil word "kai-pidi" meaning "holding hands." Traditionally played in villages as a test of strength, speed, and wit, it was formalized as a competitive sport in the 20th century. Today, Pro Kabaddi League (PKL) has made it one of India's most-watched sports, blending ancient tradition with modern athleticism in packed arenas.`;
+
+            const histLabel = this.add.text(px + 25, py + 65, historyText, {
+                fontFamily: '"Segoe UI", system-ui, sans-serif',
+                fontSize: '12px', color: 'rgba(255,255,255,0.65)',
+                wordWrap: { width: panelW - 50 }, lineSpacing: 4,
+            });
+            overlay.add(histLabel);
+
+            // Rules section
+            const rulesY = py + 165;
+            const rulesTitle = this.add.text(W/2, rulesY, 'HOW TO PLAY', {
+                fontFamily: '"Segoe UI", system-ui, sans-serif',
+                fontSize: '16px', fontStyle: 'bold',
+                color: '#f0c040', letterSpacing: '3px',
+            }).setOrigin(0.5, 0);
+            overlay.add(rulesTitle);
+
+            const rules = [
+                ['RAIDING', '#e85030', 'On your turn, cross the midline into enemy territory. Tag defenders by touching them (move close or dash). Cross BACK to your half to score! Each tag = 1 point. You must return before the cant timer (breath) runs out.'],
+                ['DEFENDING', '#3090e8', 'When the opponent raids, pick a defender to control. Tackle the raider with Space/Click to stop them. Press C to call a Chain Tackle — your AI teammates rush the raider together.'],
+                ['BONUS LINE', '#44aaff', 'Cross the bonus line (deep in enemy territory) for +1 extra point. High risk, high reward!'],
+                ['SUPER RAID', '#ff4422', 'When your team has lost members, tags are worth DOUBLE. Fight back from behind!'],
+                ['DO-OR-DIE', '#ff8844', 'After 2 empty raids in a row, your next raid is Do-or-Die. You MUST score or the defenders get a free point.'],
+                ['ALL OUT', '#44ff88', 'Tag all 3 defenders out and earn +2 bonus points. All defenders revive for the next raid.'],
+                ['REVIVAL', '#88ff44', 'Each defender you tag during a raid revives one of your knocked-out teammates.'],
+                ['LOBBY FOUL', '#ff8844', 'Defenders caught in the lobby (court edges) without tackling get stunned — a free opening for the raider!'],
+                ['ULTIMATE', '#f0c040', 'Build your meter by tagging or dodging tackles. Press E to activate — speed boost and invincibility!'],
+            ];
+
+            let ry = rulesY + 30;
+            rules.forEach(([name, color, desc]) => {
+                const nameLabel = this.add.text(px + 25, ry, name, {
+                    fontFamily: '"Segoe UI", system-ui, sans-serif',
+                    fontSize: '11px', fontStyle: 'bold',
+                    color: color, letterSpacing: '2px',
+                });
+                overlay.add(nameLabel);
+                const descLabel = this.add.text(px + 140, ry, desc, {
+                    fontFamily: '"Segoe UI", system-ui, sans-serif',
+                    fontSize: '10.5px', color: 'rgba(255,255,255,0.55)',
+                    wordWrap: { width: panelW - 175 }, lineSpacing: 2,
+                });
+                overlay.add(descLabel);
+                ry += Math.max(descLabel.height, 18) + 10;
+            });
+
+            // Close button
+            const closeY = py + panelH - 40;
+            const closeBtn = this.add.graphics();
+            closeBtn.fillStyle(0xf0c040, 0.15);
+            closeBtn.fillRoundedRect(W/2 - 60, closeY - 14, 120, 28, 6);
+            closeBtn.lineStyle(1.5, 0xf0c040, 0.4);
+            closeBtn.strokeRoundedRect(W/2 - 60, closeY - 14, 120, 28, 6);
+            overlay.add(closeBtn);
+            const closeTxt = this.add.text(W/2, closeY, 'CLOSE', {
+                fontFamily: '"Segoe UI", system-ui, sans-serif',
+                fontSize: '12px', fontStyle: 'bold',
+                color: '#f0c040', letterSpacing: '3px',
+            }).setOrigin(0.5);
+            overlay.add(closeTxt);
+            const closeHit = this.add.rectangle(W/2, closeY, 120, 28).setInteractive({ useHandCursor: true }).setAlpha(0.001);
+            overlay.add(closeHit);
+            closeHit.on('pointerdown', () => { overlay.destroy(true); });
         }
     }
     window.MenuScene = MenuScene;
@@ -2485,6 +2660,21 @@
             this.chainActive = false;
             this.chainCooldown = 0;
             this._chainBtn = null; // mobile chain button
+
+            // Bonus line tracking
+            this.bonusClaimed = false; // has raider crossed bonus line this raid?
+
+            // Super Raid tracking
+            this.superRaidActive = false; // activated when team is undermanned
+
+            // Do-or-Die tracking
+            this.consecutiveEmptyRaids = 0; // empty raids in a row
+            this.doOrDieActive = false;
+
+            // All Out tracking (handled dynamically)
+
+            // Revival system
+            // When raider scores, knocked-out teammates revive in order
         }
 
         init(data) {
@@ -2747,6 +2937,23 @@
             this.aiRaiderReturning = false;
             this.chainActive = false;
             this.chainCooldown = 0;
+            this.bonusClaimed = false;
+            this.tagsThisRaid = 0;
+
+            // Check for Super Raid (team undermanned = fewer than 3 defenders out)
+            if (isRaider) {
+                const aliveDefenders = this.defendersOut.filter(d => !d).length;
+                this.superRaidActive = aliveDefenders <= 2 && this.teamMembersLost > 0;
+            } else {
+                this.superRaidActive = false;
+            }
+
+            // Check for Do-or-Die
+            if (isRaider && this.consecutiveEmptyRaids >= KABADDI_RULES.EMPTY_RAIDS_FOR_DOD) {
+                this.doOrDieActive = true;
+            } else {
+                this.doOrDieActive = false;
+            }
 
             // ── Player position depends on role ──
             if (isRaider) {
@@ -3176,7 +3383,11 @@
 
         onDefenderTagged(def) {
             def.state=ENTITY_STATE.TAGGED; def.stunTimer=1500;
-            this.raiderScore++; document.getElementById('hud-raider-score').textContent=this.raiderScore;
+            // Super Raid: double points per tag
+            const pts = this.superRaidActive ? KABADDI_RULES.SUPER_RAID_MULTIPLIER : 1;
+            this.raiderScore += pts;
+            document.getElementById('hud-raider-score').textContent=this.raiderScore;
+            this.tagsThisRaid = (this.tagsThisRaid || 0) + 1;
             this.ultimateSystem.addMeter(GAME_CONFIG.ULT_GAIN_TAG);
             if (this.comboSystem) this.comboSystem.addHit();
             // Mark defender as OUT for subsequent turns
@@ -3185,6 +3396,10 @@
             const mx=(this.player.x+def.container.x)/2,my=(this.player.y+def.container.y)/2;
             this.vfx.triggerFullImpact(mx,my,GAME_CONFIG.COLORS.TRAIL_RAIDER);
             this.tweens.add({targets:def.container,alpha:0.3,yoyo:true,repeat:3,duration:100});
+            // Show floating score
+            if (this.superRaidActive) {
+                this._showFloatingText(mx, my - 30, `+${pts} SUPER!`, '#ff4422');
+            }
         }
 
         // ════════════════════════════════════════════════════
@@ -3240,35 +3455,165 @@
         }
 
         // ════════════════════════════════════════════════════
-        // SAFE RETURN DETECTION
-        // Raider crosses back to own half after entering enemy territory
+        // SAFE RETURN DETECTION + BONUS LINE + LOBBY RULE
         // ════════════════════════════════════════════════════
         _checkRaiderReturn() {
             if (!this.turnManager.isRaidActive) return;
             const midX = GAME_CONFIG.COURT.CENTER_X;
+            const bonusX = midX + GAME_CONFIG.COURT.BAULK_OFFSET + 80; // bonus line X
 
             if (this.turnManager.isPlayerRaider) {
-                // Player is raiding — raider starts on LEFT, defender territory is RIGHT
-                // Check if raider has crossed into defender half (right of midline)
+                // ── Bonus Line Check ──
+                if (!this.bonusClaimed && this.player.x > bonusX) {
+                    this.bonusClaimed = true;
+                    this.raiderScore += KABADDI_RULES.BONUS_LINE_POINTS;
+                    document.getElementById('hud-raider-score').textContent = this.raiderScore;
+                    // VFX + floating text
+                    this._showFloatingText(this.player.x, this.player.y - 60, '+1 BONUS!', '#44aaff');
+                    this.vfx.spawnUltBurst(this.player.x, this.player.y, 0x44aaff);
+                    window.SoundEngine.playImpact(0.5);
+                }
+
+                // ── Baulk crossing ──
                 if (this.player.x > midX + 10) {
                     this.raiderCrossedBaulk = true;
                 }
-                // If raider has been in enemy territory and crosses back to own half
+
+                // ── Safe return ──
                 if (this.raiderCrossedBaulk && this.player.x < midX - 10) {
-                    // Count how many defenders were tagged this raid
-                    const taggedCount = this.defenders.filter(d => d.state === ENTITY_STATE.TAGGED || this.defendersOut[this.defenders.indexOf(d)]).length;
-                    // Safe return! Raid ends
-                    this.turnManager.endRaid('returned');
+                    this._onRaidReturn();
                 }
             } else {
-                // AI raider — same logic but checking aiRaider position
+                // AI raider checks
+                if (!this.bonusClaimed && this.aiRaider.x > bonusX) {
+                    this.bonusClaimed = true;
+                    this.raiderScore += KABADDI_RULES.BONUS_LINE_POINTS;
+                    document.getElementById('hud-raider-score').textContent = this.raiderScore;
+                    this._showFloatingText(this.aiRaider.x, this.aiRaider.y - 60, '+1 BONUS!', '#44aaff');
+                    this.vfx.spawnUltBurst(this.aiRaider.x, this.aiRaider.y, 0x44aaff);
+                }
                 if (this.aiRaider.x > midX + 10) {
                     this.raiderCrossedBaulk = true;
                 }
                 if (this.raiderCrossedBaulk && this.aiRaider.x < midX - 10) {
-                    this.turnManager.endRaid('returned');
+                    this._onRaidReturn();
                 }
             }
+
+            // ── Lobby Rule: Defenders get stunned if they enter the lobby without tackling ──
+            this._checkLobbyFouls();
+        }
+
+        // ════════════════════════════════════════════════════
+        // RAID RETURN — handles scoring, do-or-die, all-out, revival
+        // ════════════════════════════════════════════════════
+        _onRaidReturn() {
+            const taggedThisRaid = this.defenders.filter(d => d.state === ENTITY_STATE.TAGGED).length;
+
+            // Do-or-Die check: if active and no tags, penalty
+            if (this.doOrDieActive && taggedThisRaid === 0 && !this.bonusClaimed) {
+                this.defenderScore += KABADDI_RULES.DO_OR_DIE_PENALTY;
+                document.getElementById('hud-defender-score').textContent = this.defenderScore;
+                this.turnManager.endRaid('dod_fail');
+                return;
+            }
+
+            // Track empty raids for Do-or-Die
+            if (taggedThisRaid === 0 && !this.bonusClaimed) {
+                this.consecutiveEmptyRaids++;
+            } else {
+                this.consecutiveEmptyRaids = 0;
+            }
+
+            // ── Revival system: each tag revives a lost teammate ──
+            if (this.turnManager.isPlayerRaider && taggedThisRaid > 0) {
+                let revivals = Math.min(taggedThisRaid, this.teamMembersLost);
+                if (revivals > 0) {
+                    this.teamMembersLost -= revivals;
+                    this._showFloatingText(
+                        GAME_CONFIG.COURT.CENTER_X, GAME_CONFIG.COURT.CENTER_Y - 50,
+                        `${revivals} TEAMMATE${revivals>1?'S':''} REVIVED!`, '#44ff88'
+                    );
+                }
+            }
+
+            // ── All Out check: are all defenders now out? ──
+            this._checkAllOut();
+
+            this.turnManager.endRaid('returned');
+        }
+
+        // ════════════════════════════════════════════════════
+        // ALL OUT — all defenders eliminated = bonus + revive
+        // ════════════════════════════════════════════════════
+        _checkAllOut() {
+            if (this.turnManager.isPlayerRaider) {
+                // Check if all opponent defenders are OUT
+                const allOut = this.defendersOut.every(d => d === true);
+                if (allOut) {
+                    // Award bonus points
+                    this.raiderScore += KABADDI_RULES.ALL_OUT_BONUS;
+                    document.getElementById('hud-raider-score').textContent = this.raiderScore;
+
+                    // Revive all defenders (opponent gets their team back)
+                    this.defendersOut = [false, false, false];
+
+                    // Show dramatic ALL OUT banner
+                    this._showFloatingText(
+                        GAME_CONFIG.COURT.CENTER_X, GAME_CONFIG.COURT.CENTER_Y - 80,
+                        'ALL OUT! +' + KABADDI_RULES.ALL_OUT_BONUS + ' BONUS', '#ff4422'
+                    );
+
+                    // Big VFX burst
+                    this.vfx.spawnUltBurst(GAME_CONFIG.COURT.CENTER_X, GAME_CONFIG.COURT.CENTER_Y, 0xff4422);
+                    window.SoundEngine.playImpact(0.9);
+                }
+            }
+        }
+
+        // ════════════════════════════════════════════════════
+        // LOBBY RULE — defenders foul if entering lobby without tackling
+        // ════════════════════════════════════════════════════
+        _checkLobbyFouls() {
+            const C = GAME_CONFIG.COURT;
+            const lobbyLeft = C.CENTER_X - C.WIDTH/2;
+            const lobbyRight = C.CENTER_X + C.WIDTH/2;
+            const lobbyTop = C.CENTER_Y - C.HEIGHT/2;
+            const lobbyBottom = C.CENTER_Y + C.HEIGHT/2;
+            const margin = C.LOBBY_WIDTH * 0.6; // inner edge of lobby zone
+
+            this.defenders.forEach((def, i) => {
+                if (def.state === ENTITY_STATE.TAGGED || def.state === ENTITY_STATE.OUT || def.state === ENTITY_STATE.STUNNED) return;
+                // Only check AI defenders (skip player-controlled slot when defending)
+                if (!this.turnManager.isPlayerRaider && i === this.selectedDefenderIdx) return;
+
+                const x = def.container.x, y = def.container.y;
+                const inLobby = x < lobbyLeft + margin || x > lobbyRight - margin ||
+                                y < lobbyTop + margin || y > lobbyBottom - margin;
+
+                if (inLobby && def.state !== ENTITY_STATE.TACKLING) {
+                    // Foul! Stun the defender briefly and push them back
+                    def.state = ENTITY_STATE.STUNNED;
+                    def.stunTimer = KABADDI_RULES.LOBBY_STUN_DURATION;
+                    def.container.setAlpha(0.4);
+                    this._showFloatingText(x, y - 40, 'LOBBY FOUL!', '#ff8844');
+                }
+            });
+        }
+
+        // ════════════════════════════════════════════════════
+        // FLOATING TEXT UTILITY
+        // ════════════════════════════════════════════════════
+        _showFloatingText(x, y, text, color) {
+            const label = this.add.text(x, y, text, {
+                fontFamily: '"Segoe UI", system-ui, sans-serif',
+                fontSize: '16px', fontStyle: 'bold', color: color,
+                stroke: '#000000', strokeThickness: 4
+            }).setOrigin(0.5).setDepth(200);
+            this.tweens.add({
+                targets: label, y: y - 50, alpha: 0, duration: 1500,
+                ease: 'Power2', onComplete: () => label.destroy()
+            });
         }
 
         // ════════════════════════════════════════════════════
