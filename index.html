@@ -1008,7 +1008,7 @@
         advanceTurn() {
             this.currentTurn++;
             if (this.currentTurn > this.maxTurns) { this.endMatch(); }
-            else { this.scene.resetRaidPositions(); this.startPreRaid(); }
+            else { this.startPreRaid(); this.scene.resetRaidPositions(); }
         }
 
         endMatch() {
@@ -2459,6 +2459,12 @@
             // Defender pick
             this.selectedDefenderIdx = 0;
             this._defPickUI = null; // container for pick overlay
+
+            // Track which opponents are OUT across turns
+            // defendersOut = opponent defenders tagged by player (fewer defenders when player raids)
+            // teamMembersLost = how many of player's team lost (fewer defenders when player defends)
+            this.defendersOut = [false, false, false];
+            this.teamMembersLost = 0;
         }
 
         init(data) {
@@ -2722,12 +2728,44 @@
             const selIdx = this.selectedDefenderIdx || 0;
             this.defenders.forEach((def,i)=>{
                 const p = formPos[i % formPos.length];
-                def.container.setPosition(p.x,p.y);def.container.setAlpha(1);def.state=ENTITY_STATE.IDLE;
+                def.container.setPosition(p.x,p.y);
                 def.tackleTimer=0;def.tackleCooldownTimer=0;def.stunTimer=0;def.homeX=p.x;def.homeY=p.y;
-                // When defending: hide the defender slot the player occupies
-                const isPlayerSlot = !isRaider && i === selIdx;
-                def.container.setVisible(!isPlayerSlot);
-                def.shadow.setVisible(!isPlayerSlot);
+
+                if (isRaider) {
+                    // Player is raiding: these are OPPONENT defenders
+                    // Hide any that were tagged out in a previous raid
+                    if (this.defendersOut[i]) {
+                        def.state = ENTITY_STATE.OUT;
+                        def.container.setAlpha(0);
+                        def.container.setVisible(false);
+                        def.shadow.setVisible(false);
+                    } else {
+                        def.state = ENTITY_STATE.IDLE;
+                        def.container.setAlpha(1);
+                        def.container.setVisible(true);
+                        def.shadow.setVisible(true);
+                    }
+                } else {
+                    // Player is defending: these are TEAMMATES
+                    // Hide the slot the player occupies + any lost team members
+                    const isPlayerSlot = i === selIdx;
+                    // Lost teammates: remove from highest index down (excluding player slot)
+                    const otherSlots = [0,1,2].filter(j => j !== selIdx);
+                    const lostSlots = otherSlots.slice(otherSlots.length - this.teamMembersLost);
+                    const isLost = lostSlots.includes(i);
+
+                    if (isPlayerSlot || isLost) {
+                        def.state = isLost ? ENTITY_STATE.OUT : ENTITY_STATE.IDLE;
+                        def.container.setAlpha(0);
+                        def.container.setVisible(false);
+                        def.shadow.setVisible(false);
+                    } else {
+                        def.state = ENTITY_STATE.IDLE;
+                        def.container.setAlpha(1);
+                        def.container.setVisible(true);
+                        def.shadow.setVisible(true);
+                    }
+                }
             });
 
             // ── AI Raider: visible only when player is defending ──
@@ -2752,7 +2790,10 @@
             document.getElementById('hud-raider-score').textContent='0';
             document.getElementById('hud-defender-score').textContent='0';
             this.turnManager.currentTurn=1;
-            this.resetRaidPositions(); this.turnManager.startPreRaid();
+            // Reset all out-trackers for fresh match
+            this.defendersOut = [false, false, false];
+            this.teamMembersLost = 0;
+            this.turnManager.startPreRaid(); this.resetRaidPositions();
         }
 
         // ════════════════════════════════════════════════════
@@ -2816,72 +2857,90 @@
             const totalW = 3 * cardW + 2 * gap;
             const startX = W/2 - totalW/2 + cardW/2;
 
+            // Determine which slots are lost (highest indices first)
+            const lostSlots = [];
+            for (let j = 2; j >= 0 && lostSlots.length < this.teamMembersLost; j--) {
+                lostSlots.push(j);
+            }
+
             for (let i = 0; i < 3; i++) {
                 const cx = startX + i * (cardW + gap);
                 const cy = H/2 + 10;
+                const isOut = lostSlots.includes(i);
 
                 // Card background
                 const card = this.add.graphics().setScrollFactor(0);
-                card.fillStyle(0x3090e8, 0.08);
-                card.fillRoundedRect(cx - cardW/2, cy - cardH/2, cardW, cardH, 12);
-                card.lineStyle(2, 0x3090e8, 0.3);
-                card.strokeRoundedRect(cx - cardW/2, cy - cardH/2, cardW, cardH, 12);
+                if (isOut) {
+                    card.fillStyle(0x333333, 0.15);
+                    card.fillRoundedRect(cx - cardW/2, cy - cardH/2, cardW, cardH, 12);
+                    card.lineStyle(2, 0x555555, 0.2);
+                    card.strokeRoundedRect(cx - cardW/2, cy - cardH/2, cardW, cardH, 12);
+                } else {
+                    card.fillStyle(0x3090e8, 0.08);
+                    card.fillRoundedRect(cx - cardW/2, cy - cardH/2, cardW, cardH, 12);
+                    card.lineStyle(2, 0x3090e8, 0.3);
+                    card.strokeRoundedRect(cx - cardW/2, cy - cardH/2, cardW, cardH, 12);
+                }
                 container.add(card);
 
                 // Character preview
                 const charGfx = this.add.graphics().setScrollFactor(0);
                 ProceduralCharacterRenderer.drawCharacter(charGfx, {
-                    bodyColor: GAME_CONFIG.COLORS.DEFENDER_BODY, accentColor: 0x2070c0,
+                    bodyColor: isOut ? 0x444444 : GAME_CONFIG.COLORS.DEFENDER_BODY,
+                    accentColor: isOut ? 0x333333 : 0x2070c0,
                     number: defNums[i], isRaider: false, state: 'idle',
                     animPhase: 0, facingX: -1,
                 });
                 charGfx.setPosition(cx, cy - 30);
+                if (isOut) charGfx.setAlpha(0.3);
                 container.add(charGfx);
 
                 // Number
                 const numTxt = this.add.text(cx, cy - 24, defNums[i], {
                     fontFamily: '"Segoe UI", system-ui, sans-serif',
-                    fontSize: '16px', fontStyle: 'bold', color: '#ffffff',
+                    fontSize: '16px', fontStyle: 'bold', color: isOut ? '#555555' : '#ffffff',
                 }).setOrigin(0.5).setScrollFactor(0);
                 container.add(numTxt);
 
                 // Name & description
-                const nameTxt = this.add.text(cx, cy + 40, defNames[i], {
+                const nameTxt = this.add.text(cx, cy + 40, isOut ? 'OUT' : defNames[i], {
                     fontFamily: '"Segoe UI", system-ui, sans-serif',
-                    fontSize: '14px', fontStyle: 'bold', color: '#44aaff',
+                    fontSize: '14px', fontStyle: 'bold', color: isOut ? '#ff4422' : '#44aaff',
                     letterSpacing: 2,
                 }).setOrigin(0.5).setScrollFactor(0);
                 container.add(nameTxt);
 
-                const descTxt = this.add.text(cx, cy + 60, defDescs[i], {
+                const descTxt = this.add.text(cx, cy + 60, isOut ? 'Tackled in previous raid' : defDescs[i], {
                     fontFamily: '"Segoe UI", system-ui, sans-serif',
-                    fontSize: '10px', color: 'rgba(255,255,255,0.4)',
+                    fontSize: '10px', color: isOut ? 'rgba(255,50,50,0.4)' : 'rgba(255,255,255,0.4)',
                 }).setOrigin(0.5).setScrollFactor(0);
                 container.add(descTxt);
 
-                // Hit area
-                const hitArea = this.add.rectangle(cx, cy, cardW, cardH)
-                    .setInteractive({ useHandCursor: true }).setAlpha(0.001).setScrollFactor(0);
-                container.add(hitArea);
+                if (!isOut) {
+                    // Hit area (only for available defenders)
+                    const hitArea = this.add.rectangle(cx, cy, cardW, cardH)
+                        .setInteractive({ useHandCursor: true }).setAlpha(0.001).setScrollFactor(0);
+                    container.add(hitArea);
 
-                const defIdx = i;
-                hitArea.on('pointerover', () => {
-                    card.clear();
-                    card.fillStyle(0x3090e8, 0.2);
-                    card.fillRoundedRect(cx - cardW/2, cy - cardH/2, cardW, cardH, 12);
-                    card.lineStyle(2.5, 0x44ddff, 0.7);
-                    card.strokeRoundedRect(cx - cardW/2, cy - cardH/2, cardW, cardH, 12);
-                });
-                hitArea.on('pointerout', () => {
-                    card.clear();
-                    card.fillStyle(0x3090e8, 0.08);
-                    card.fillRoundedRect(cx - cardW/2, cy - cardH/2, cardW, cardH, 12);
-                    card.lineStyle(2, 0x3090e8, 0.3);
-                    card.strokeRoundedRect(cx - cardW/2, cy - cardH/2, cardW, cardH, 12);
-                });
-                hitArea.on('pointerdown', () => {
-                    this._confirmDefenderPick(defIdx);
-                });
+                    const defIdx = i;
+                    hitArea.on('pointerover', () => {
+                        card.clear();
+                        card.fillStyle(0x3090e8, 0.2);
+                        card.fillRoundedRect(cx - cardW/2, cy - cardH/2, cardW, cardH, 12);
+                        card.lineStyle(2.5, 0x44ddff, 0.7);
+                        card.strokeRoundedRect(cx - cardW/2, cy - cardH/2, cardW, cardH, 12);
+                    });
+                    hitArea.on('pointerout', () => {
+                        card.clear();
+                        card.fillStyle(0x3090e8, 0.08);
+                        card.fillRoundedRect(cx - cardW/2, cy - cardH/2, cardW, cardH, 12);
+                        card.lineStyle(2, 0x3090e8, 0.3);
+                        card.strokeRoundedRect(cx - cardW/2, cy - cardH/2, cardW, cardH, 12);
+                    });
+                    hitArea.on('pointerdown', () => {
+                        this._confirmDefenderPick(defIdx);
+                    });
+                } // end if (!isOut)
             }
 
             // Tip text
@@ -3072,6 +3131,9 @@
             this.raiderScore++; document.getElementById('hud-raider-score').textContent=this.raiderScore;
             this.ultimateSystem.addMeter(GAME_CONFIG.ULT_GAIN_TAG);
             if (this.comboSystem) this.comboSystem.addHit();
+            // Mark defender as OUT for subsequent turns
+            const defIdx = this.defenders.indexOf(def);
+            if (defIdx >= 0) this.defendersOut[defIdx] = true;
             const mx=(this.player.x+def.container.x)/2,my=(this.player.y+def.container.y)/2;
             this.vfx.triggerFullImpact(mx,my,GAME_CONFIG.COLORS.TRAIL_RAIDER);
             this.tweens.add({targets:def.container,alpha:0.3,yoyo:true,repeat:3,duration:100});
@@ -3109,6 +3171,8 @@
             this.playerState=ENTITY_STATE.STUNNED; def.state=ENTITY_STATE.IDLE;
             this.defenderScore++; document.getElementById('hud-defender-score').textContent=this.defenderScore;
             if (this.comboSystem) this.comboSystem.reset();
+            // Player's team loses a member (shown when player defends next)
+            this.teamMembersLost = Math.min(this.teamMembersLost + 1, 2); // can't lose all 3
             const mx=(this.player.x+def.container.x)/2,my=(this.player.y+def.container.y)/2;
             this.vfx.triggerFullImpact(mx,my,GAME_CONFIG.COLORS.TRAIL_DEFENDER);
             this.tweens.add({targets:this.player,alpha:0.3,yoyo:true,repeat:4,duration:100,onComplete:()=>{this.playerState=ENTITY_STATE.IDLE;this.player.setAlpha(1);}});
