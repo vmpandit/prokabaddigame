@@ -1926,10 +1926,18 @@
         }
 
         create() {
+            // Ensure other scenes are fully stopped when returning to menu
+            this.scene.stop('MainGameScene');
+            this.scene.stop('TutorialScene');
+            document.body.classList.remove('gameplay-active');
+            // Hide banners/overlays
+            const banner = document.getElementById('turn-banner');
+            if (banner) { banner.classList.remove('show'); }
+
             const W = GAME_CONFIG.DESIGN_WIDTH;
             const H = GAME_CONFIG.DESIGN_HEIGHT;
 
-            // Background
+            // Background — full opaque fill to cover anything beneath
             const bg = this.add.graphics();
             bg.fillStyle(0x0a0a12, 1);
             bg.fillRect(0, 0, W, H);
@@ -2005,6 +2013,7 @@
                     btn.strokeRoundedRect(bx - 55, by - 25, 110, 50, 8);
                 });
                 hitArea.on('pointerdown', () => {
+                    this.scene.stop('MenuScene');
                     this.scene.start('MainGameScene', { difficulty: diff });
                 });
             });
@@ -2737,7 +2746,13 @@
         }
 
         create() {
+            // Ensure other scenes are fully stopped
+            this.scene.stop('MenuScene');
+            this.scene.stop('TutorialScene');
             document.body.classList.add('gameplay-active');
+            // Hide any lingering banners
+            const banner = document.getElementById('turn-banner');
+            if (banner) { banner.classList.remove('show'); }
             const { COURT } = GAME_CONFIG;
             this.vfx = new VFXManager(this);
             this.turnManager = new TurnManager(this);
