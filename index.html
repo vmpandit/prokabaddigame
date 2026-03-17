@@ -21,7 +21,23 @@
             -webkit-touch-callout: none; -webkit-user-select: none; user-select: none;
             font-family: 'Segoe UI', system-ui, sans-serif;
         }
-        #game-container { width: 100%; height: 100%; display: flex; align-items: center; justify-content: center; }
+        #game-container { width: 100%; height: 100%; display: flex; align-items: center; justify-content: center; overflow: hidden; }
+        canvas { max-width: 100vw !important; max-height: 100vh !important; }
+
+        /* Portrait mode warning for mobile */
+        #rotate-prompt {
+            display: none; position: fixed; inset: 0; z-index: 9999;
+            background: #0a0a12; color: #f0c040;
+            flex-direction: column; align-items: center; justify-content: center;
+            font-family: 'Segoe UI', system-ui, sans-serif; text-align: center;
+        }
+        #rotate-prompt .icon { font-size: 48px; margin-bottom: 16px; animation: rotateHint 2s ease-in-out infinite; }
+        #rotate-prompt p { font-size: 16px; letter-spacing: 2px; }
+        #rotate-prompt .dismiss { margin-top: 20px; font-size: 12px; color: rgba(255,255,255,0.4); cursor: pointer; text-decoration: underline; }
+        @keyframes rotateHint { 0%,100% { transform: rotate(0deg); } 50% { transform: rotate(90deg); } }
+        @media (orientation: portrait) and (max-width: 768px) {
+            #rotate-prompt { display: flex; }
+        }
 
         #loading-overlay {
             position: fixed; inset: 0; z-index: 100;
@@ -71,6 +87,12 @@
     </style>
 </head>
 <body>
+    <div id="rotate-prompt">
+        <div class="icon">&#x1F4F1;</div>
+        <p>ROTATE YOUR DEVICE</p>
+        <p style="font-size:12px;color:rgba(255,255,255,0.4);margin-top:8px;">This game is best played in landscape</p>
+        <div class="dismiss" onclick="document.getElementById('rotate-prompt').style.display='none'">Play anyway</div>
+    </div>
     <div id="loading-overlay"><div class="spinner"></div><h1>Pro Kabaddi</h1><div class="subtitle">Championship</div></div>
 
     <div id="hud-overlay">
@@ -1077,6 +1099,19 @@
             const rs=this.scene.raiderScore, ds=this.scene.defenderScore;
             this.bannerTitle.textContent = rs>ds?'YOU WIN!':ds>rs?'DEFENDERS WIN!':'DRAW!';
             this.bannerSub.textContent = `Final: You ${rs} — ${ds} Defenders  |  Tap to continue`;
+
+            // Add click/touch handler directly on the HTML banner overlay
+            const bannerClickHandler = () => {
+                this.bannerEl.removeEventListener('pointerdown', bannerClickHandler);
+                this.bannerEl.removeEventListener('touchend', bannerClickHandler);
+                this.bannerEl.classList.remove('show');
+                this.scene.scene.start('MenuScene');
+            };
+            // Small delay so the banner shows first
+            setTimeout(() => {
+                this.bannerEl.addEventListener('pointerdown', bannerClickHandler);
+                this.bannerEl.addEventListener('touchend', bannerClickHandler);
+            }, 500);
             this.bannerEl.classList.add('show');
         }
 
@@ -3229,26 +3264,26 @@
             const s=this;
 
             // Mobile touch polish: edge-swipe dead zone (prevents accidental browser gestures)
-            const EDGE_MARGIN = 20; // px from screen edge to ignore touches
+            const EDGE_MARGIN = 8; // px from screen edge to ignore touches (reduced for small screens)
 
             this.input.on('pointerdown',(p)=>{
                 if(!this.turnManager.isRaidActive) return;
 
-                // Edge-swipe prevention: ignore touches very near screen edges
-                const rawX = p.event ? (p.event.clientX || p.x) : p.x;
-                const rawY = p.event ? (p.event.clientY || p.y) : p.y;
+                // Edge-swipe prevention: ignore touches very near screen edges (use raw screen coords)
+                const rawX = p.event ? (p.event.clientX != null ? p.event.clientX : p.x) : p.x;
+                const rawY = p.event ? (p.event.clientY != null ? p.event.clientY : p.y) : p.y;
                 const screenW = window.innerWidth, screenH = window.innerHeight;
                 if (rawX < EDGE_MARGIN || rawX > screenW - EDGE_MARGIN ||
                     rawY < EDGE_MARGIN || rawY > screenH - EDGE_MARGIN) return;
 
-                const sx=p.x/(this.scale.displaySize.width/GAME_CONFIG.DESIGN_WIDTH);
-                if(sx<GAME_CONFIG.DESIGN_WIDTH*0.5&&!s.leftJoystickActive){
+                // p.x is already in game coordinates with Scale.FIT
+                if(p.x<GAME_CONFIG.DESIGN_WIDTH*0.5&&!s.leftJoystickActive){
                     s.leftJoystickActive=true;s.leftJoystickPointerID=p.id;
                     // Joystick repositions to touch point
                     s.leftJoystickOrigin.x=p.x;s.leftJoystickOrigin.y=p.y;
                     s.leftJoystickBase.setPosition(p.x,p.y).setVisible(true);
                     s.leftJoystickThumb.setPosition(p.x,p.y).setVisible(true);
-                } else if(sx>=GAME_CONFIG.DESIGN_WIDTH*0.5&&!s.rightJoystickActive){
+                } else if(p.x>=GAME_CONFIG.DESIGN_WIDTH*0.5&&!s.rightJoystickActive){
                     s.rightJoystickActive=true;s.rightJoystickPointerID=p.id;
                     s.rightJoystickOrigin.x=p.x;s.rightJoystickOrigin.y=p.y;
                     s.rightJoystickBase.setPosition(p.x,p.y).setVisible(true);
@@ -4115,7 +4150,7 @@
         type: Phaser.WEBGL, parent:'game-container',
         scale:{mode:Phaser.Scale.FIT,autoCenter:Phaser.Scale.CENTER_BOTH,width:GAME_CONFIG.DESIGN_WIDTH,height:GAME_CONFIG.DESIGN_HEIGHT,min:{width:320,height:180},max:{width:1920,height:1080}},
         backgroundColor:'#0a0a12',antialias:true,
-        input:{activePointers:3,touch:{capture:true}},
+        input:{activePointers:4,touch:{capture:true,target:document.getElementById('game-container')}},
         fps:{target:60}, scene:[MenuScene, TutorialScene, MainGameScene],
     };
     const game = new Phaser.Game(phaserConfig);
