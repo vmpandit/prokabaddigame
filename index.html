@@ -25,15 +25,14 @@
             height: -webkit-fill-available;
         }
         #game-container {
-            width: 100%; height: 100%;
+            position: fixed; top: 0; left: 0;
+            width: 100vw; height: 100vh;
             height: 100dvh;
             height: -webkit-fill-available;
-            display: flex; align-items: center; justify-content: center;
             overflow: hidden;
-            /* No padding — Phaser Scale.FIT + CENTER_BOTH handles centering.
-               Safe-area is handled by the HUD overlay's own padding. */
+            /* Phaser's autoCenter: CENTER_BOTH positions the canvas inside this */
         }
-        /* Let Phaser handle canvas sizing — just prevent overflow */
+        /* Let Phaser handle canvas sizing and centering */
         #game-container canvas {
             display: block;
         }
@@ -4299,14 +4298,28 @@
     // Resize handler: keep container matched to actual visible viewport
     function onResize() {
         const c = document.getElementById('game-container');
-        c.style.width = window.innerWidth + 'px';
-        c.style.height = window.innerHeight + 'px';
+        // visualViewport is the most accurate on iOS Safari (accounts for tab bar, URL bar)
+        const vv = window.visualViewport;
+        const w = vv ? vv.width : window.innerWidth;
+        const h = vv ? vv.height : window.innerHeight;
+        c.style.width = w + 'px';
+        c.style.height = h + 'px';
+        // Also offset if visualViewport is shifted (e.g. when keyboard shows)
+        if (vv) {
+            c.style.left = vv.offsetLeft + 'px';
+            c.style.top = vv.offsetTop + 'px';
+        }
         if (game && game.scale) game.scale.refresh();
     }
     window.addEventListener('resize', onResize);
+    window.addEventListener('orientationchange', () => { setTimeout(onResize, 100); setTimeout(onResize, 500); });
     // iOS Safari fires this when URL bar appears/disappears
-    window.visualViewport && window.visualViewport.addEventListener('resize', onResize);
+    if (window.visualViewport) {
+        window.visualViewport.addEventListener('resize', onResize);
+        window.visualViewport.addEventListener('scroll', onResize);
+    }
     // Delayed refresh for iOS Safari initial layout
+    setTimeout(onResize, 100);
     setTimeout(onResize, 300);
     setTimeout(onResize, 1000);
 
