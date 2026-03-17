@@ -2802,6 +2802,7 @@
 
             this.input.on('pointerdown', () => {
                 if (this.turnManager.phase === GAME_PHASE.MATCH_OVER) {
+                    document.body.classList.remove('gameplay-active');
                     this.scene.start('MenuScene');
                 }
             });
