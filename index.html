@@ -87,7 +87,8 @@
         #hud-role.defender { background: rgba(48,144,232,0.2); color: #3090e8; }
 
         /* ── Sound Toggle (Slice 4) ── */
-        #sound-toggle { position: fixed; bottom: 10px; right: 10px; z-index: 55; pointer-events: auto; background: rgba(10,10,18,0.6); backdrop-filter: blur(6px); border: 1px solid rgba(240,192,64,0.2); border-radius: 6px; color: rgba(255,255,255,0.5); font-size: 11px; padding: 4px 10px; cursor: pointer; font-family: inherit; }
+        #sound-toggle { position: fixed; bottom: 10px; right: 10px; z-index: 55; pointer-events: auto; background: rgba(10,10,18,0.6); backdrop-filter: blur(6px); border: 1px solid rgba(240,192,64,0.2); border-radius: 6px; color: rgba(255,255,255,0.5); font-size: 11px; padding: 4px 10px; cursor: pointer; font-family: inherit; touch-action: none; }
+        body.gameplay-active #sound-toggle { pointer-events: none; opacity: 0.2; }
         #sound-toggle:hover { color: #f0c040; border-color: rgba(240,192,64,0.4); }
 
         /* ── Env Label (Slice 4) ── */
@@ -1119,6 +1120,7 @@
                 this.bannerEl.removeEventListener('pointerdown', bannerClickHandler);
                 this.bannerEl.removeEventListener('touchend', bannerClickHandler);
                 this.bannerEl.classList.remove('show');
+                document.body.classList.remove('gameplay-active');
                 this.scene.scene.start('MenuScene');
             };
             // Small delay so the banner shows first
@@ -2735,6 +2737,7 @@
         }
 
         create() {
+            document.body.classList.add('gameplay-active');
             const { COURT } = GAME_CONFIG;
             this.vfx = new VFXManager(this);
             this.turnManager = new TurnManager(this);
@@ -2753,8 +2756,8 @@
             this.spawnAIRaider();
 
             this.setupDualTouchJoysticks();
-            this.setupKeyboardInput();
             this.createJoystickGraphics();
+            this.setupKeyboardInput();
             this.aimLine = this.add.graphics().setDepth(15);
             this.cantRingGfx = this.add.graphics().setDepth(7);
 
@@ -3274,138 +3277,144 @@
         // ════════════════════════════════════════════════════
         // INPUT
         // ════════════════════════════════════════════════════
+        // ════════════════════════════════════════════════════
+        // BRAWL STARS JOYSTICK SYSTEM
+        // Creates graphics FIRST, then attaches touch handlers
+        // Left half = MOVE joystick, Right half = AIM/ACTION joystick
+        // ════════════════════════════════════════════════════
         setupDualTouchJoysticks() {
-            const s=this;
-
-            // Mobile touch polish: edge-swipe dead zone (prevents accidental browser gestures)
-            const EDGE_MARGIN = 8; // px from screen edge to ignore touches (reduced for small screens)
-
-            this.input.on('pointerdown',(p)=>{
-                // Allow joystick during pre-raid and raid_active (so players can start moving immediately)
-                const phase = this.turnManager.phase;
-                if(phase !== GAME_PHASE.PRE_RAID && phase !== GAME_PHASE.RAID_ACTIVE) return;
-
-                // Edge-swipe prevention: ignore touches very near screen edges (use raw screen coords)
-                const rawX = p.event ? (p.event.clientX != null ? p.event.clientX : p.x) : p.x;
-                const rawY = p.event ? (p.event.clientY != null ? p.event.clientY : p.y) : p.y;
-                const screenW = window.innerWidth, screenH = window.innerHeight;
-                if (rawX < EDGE_MARGIN || rawX > screenW - EDGE_MARGIN ||
-                    rawY < EDGE_MARGIN || rawY > screenH - EDGE_MARGIN) return;
-
-                // p.x is already in game coordinates with Scale.FIT
-                if(p.x<GAME_CONFIG.DESIGN_WIDTH*0.5&&!s.leftJoystickActive){
-                    s.leftJoystickActive=true;s.leftJoystickPointerID=p.id;
-                    // Joystick repositions to touch point
-                    s.leftJoystickOrigin.x=p.x;s.leftJoystickOrigin.y=p.y;
-                    s.leftJoystickBase.setPosition(p.x,p.y).setVisible(true);
-                    s.leftJoystickThumb.setPosition(p.x,p.y).setVisible(true);
-                } else if(p.x>=GAME_CONFIG.DESIGN_WIDTH*0.5&&!s.rightJoystickActive){
-                    s.rightJoystickActive=true;s.rightJoystickPointerID=p.id;
-                    s.rightJoystickOrigin.x=p.x;s.rightJoystickOrigin.y=p.y;
-                    s.rightJoystickBase.setPosition(p.x,p.y).setVisible(true);
-                    s.rightJoystickThumb.setPosition(p.x,p.y).setVisible(true);
-                }
-            });
-            this.input.on('pointermove',(p)=>{
-                if(s.leftJoystickActive&&p.id===s.leftJoystickPointerID){
-                    const r=this.computeJoystick(p,s.leftJoystickOrigin);s.leftJoystickThumb.setPosition(r.thumbX,r.thumbY);
-                    if(r.magnitude<GAME_CONFIG.JOYSTICK_DEADZONE){s.moveVector.x=0;s.moveVector.y=0;}
-                    else{s.moveVector.x=Math.cos(r.angle)*r.magnitude;s.moveVector.y=Math.sin(r.angle)*r.magnitude;}
-                }
-                if(s.rightJoystickActive&&p.id===s.rightJoystickPointerID){
-                    const r=this.computeJoystick(p,s.rightJoystickOrigin);s.rightJoystickThumb.setPosition(r.thumbX,r.thumbY);
-                    if(r.magnitude<GAME_CONFIG.JOYSTICK_DEADZONE){s.aimVector.x=0;s.aimVector.y=0;}
-                    else{s.aimVector.x=Math.cos(r.angle)*r.magnitude;s.aimVector.y=Math.sin(r.angle)*r.magnitude;}
-                }
-            });
-            const up=(p)=>{
-                if(p.id===s.leftJoystickPointerID){s.leftJoystickActive=false;s.leftJoystickPointerID=null;s.moveVector.x=0;s.moveVector.y=0;s.leftJoystickBase.setVisible(false);s.leftJoystickThumb.setVisible(false);}
-                if(p.id===s.rightJoystickPointerID){
-                    if(Math.abs(s.aimVector.x)>0.1||Math.abs(s.aimVector.y)>0.1) s.triggerAction(s.aimVector.x,s.aimVector.y);
-                    s.rightJoystickActive=false;s.rightJoystickPointerID=null;s.aimVector.x=0;s.aimVector.y=0;
-                    s.rightJoystickBase.setVisible(false);s.rightJoystickThumb.setVisible(false);if(s.aimLine)s.aimLine.clear();
-                }
-            };
-            this.input.on('pointerup',up);this.input.on('pointerupoutside',up);
+            // NOOP — all setup done in createJoystickGraphics
         }
 
         computeJoystick(p,o){const dx=p.x-o.x,dy=p.y-o.y,d=Math.sqrt(dx*dx+dy*dy),m=GAME_CONFIG.JOYSTICK_RADIUS,c=Math.min(d,m),a=Math.atan2(dy,dx);return{angle:a,magnitude:c/m,thumbX:o.x+Math.cos(a)*c,thumbY:o.y+Math.sin(a)*c};}
 
         createJoystickGraphics(){
-            const r=GAME_CONFIG.JOYSTICK_RADIUS;
-            const isMobile = this.sys.game.device.input.touch;
+            const r = GAME_CONFIG.JOYSTICK_RADIUS;
+            const W = GAME_CONFIG.DESIGN_WIDTH, H = GAME_CONFIG.DESIGN_HEIGHT;
+            const s = this;
 
-            // ── LEFT JOYSTICK (movement) — Brawl Stars style ──
-            // Static base: always visible in bottom-left during gameplay
-            this.leftJoystickBaseStatic = this.add.graphics().setDepth(99).setScrollFactor(0).setVisible(false);
-            this.leftJoystickBaseStatic.fillStyle(0xffffff, 0.06);
-            this.leftJoystickBaseStatic.fillCircle(0, 0, r + 10);
-            this.leftJoystickBaseStatic.lineStyle(2, 0xffffff, 0.12);
-            this.leftJoystickBaseStatic.strokeCircle(0, 0, r + 10);
-            // Crosshair lines in base
-            this.leftJoystickBaseStatic.lineStyle(1, 0xffffff, 0.08);
-            this.leftJoystickBaseStatic.lineBetween(-r+10, 0, r-10, 0);
-            this.leftJoystickBaseStatic.lineBetween(0, -r+10, 0, r-10);
-            if (isMobile) {
-                this.leftJoystickBaseStatic.setPosition(140, GAME_CONFIG.DESIGN_HEIGHT - 140);
-                this.leftJoystickBaseStatic.setVisible(true);
-            }
+            // ── LEFT JOYSTICK (movement) ──
+            // Static base — always visible during gameplay, bottom-left
+            this.leftJoystickBaseStatic = this.add.graphics().setDepth(99).setScrollFactor(0);
+            this.leftJoystickBaseStatic.fillStyle(0xffffff, 0.15);
+            this.leftJoystickBaseStatic.fillCircle(0, 0, r + 12);
+            this.leftJoystickBaseStatic.lineStyle(3, 0xffffff, 0.35);
+            this.leftJoystickBaseStatic.strokeCircle(0, 0, r + 12);
+            this.leftJoystickBaseStatic.lineStyle(1.5, 0xffffff, 0.1);
+            this.leftJoystickBaseStatic.lineBetween(-r, 0, r, 0);
+            this.leftJoystickBaseStatic.lineBetween(0, -r, 0, r);
+            this.leftJoystickBaseStatic.setPosition(150, H - 150).setVisible(true);
 
-            // Dynamic base (appears at touch point)
-            this.leftJoystickBase=this.add.graphics().setDepth(100).setVisible(false).setScrollFactor(0);
-            this.leftJoystickBase.fillStyle(0xffffff, 0.08);
-            this.leftJoystickBase.fillCircle(0,0,r);
-            this.leftJoystickBase.lineStyle(2.5,0xffffff,0.35);
-            this.leftJoystickBase.strokeCircle(0,0,r);
+            // Dynamic active ring
+            this.leftJoystickBase = this.add.graphics().setDepth(100).setVisible(false).setScrollFactor(0);
+            this.leftJoystickBase.lineStyle(3, 0xffffff, 0.4);
+            this.leftJoystickBase.strokeCircle(0, 0, r);
 
-            // Thumb (bright, large)
-            this.leftJoystickThumb=this.add.graphics().setDepth(101).setVisible(false).setScrollFactor(0);
-            this.leftJoystickThumb.fillStyle(0xffffff,0.5);
-            this.leftJoystickThumb.fillCircle(0,0,32);
-            this.leftJoystickThumb.lineStyle(3,0xffffff,0.7);
-            this.leftJoystickThumb.strokeCircle(0,0,32);
+            // Thumb
+            this.leftJoystickThumb = this.add.graphics().setDepth(101).setVisible(false).setScrollFactor(0);
+            this.leftJoystickThumb.fillStyle(0xffffff, 0.55);
+            this.leftJoystickThumb.fillCircle(0, 0, 30);
+            this.leftJoystickThumb.lineStyle(3, 0xffffff, 0.8);
+            this.leftJoystickThumb.strokeCircle(0, 0, 30);
 
-            // "MOVE" label under static base
-            if (isMobile) {
-                this.leftJoystickLabel = this.add.text(140, GAME_CONFIG.DESIGN_HEIGHT - 70, 'MOVE', {
-                    fontFamily: '"Segoe UI", system-ui, sans-serif', fontSize: '10px',
-                    fontStyle: 'bold', color: 'rgba(255,255,255,0.2)', letterSpacing: '3px',
-                }).setOrigin(0.5).setDepth(99).setScrollFactor(0);
-            }
+            // Label
+            this.leftJoystickLabel = this.add.text(150, H - 78, 'MOVE', {
+                fontFamily: '"Segoe UI", system-ui, sans-serif', fontSize: '11px',
+                fontStyle: 'bold', color: 'rgba(255,255,255,0.25)', letterSpacing: '3px',
+            }).setOrigin(0.5).setDepth(99).setScrollFactor(0);
 
-            // ── RIGHT JOYSTICK (aim/action) — Brawl Stars style ──
-            this.rightJoystickBaseStatic = this.add.graphics().setDepth(99).setScrollFactor(0).setVisible(false);
-            this.rightJoystickBaseStatic.fillStyle(0xff6644, 0.06);
-            this.rightJoystickBaseStatic.fillCircle(0, 0, r + 10);
-            this.rightJoystickBaseStatic.lineStyle(2, 0xff6644, 0.12);
-            this.rightJoystickBaseStatic.strokeCircle(0, 0, r + 10);
-            this.rightJoystickBaseStatic.lineStyle(1, 0xff6644, 0.08);
-            this.rightJoystickBaseStatic.lineBetween(-r+10, 0, r-10, 0);
-            this.rightJoystickBaseStatic.lineBetween(0, -r+10, 0, r-10);
-            if (isMobile) {
-                this.rightJoystickBaseStatic.setPosition(GAME_CONFIG.DESIGN_WIDTH - 140, GAME_CONFIG.DESIGN_HEIGHT - 140);
-                this.rightJoystickBaseStatic.setVisible(true);
-            }
+            // ── RIGHT JOYSTICK (aim + action) ──
+            this.rightJoystickBaseStatic = this.add.graphics().setDepth(99).setScrollFactor(0);
+            this.rightJoystickBaseStatic.fillStyle(0xff6644, 0.15);
+            this.rightJoystickBaseStatic.fillCircle(0, 0, r + 12);
+            this.rightJoystickBaseStatic.lineStyle(3, 0xff6644, 0.35);
+            this.rightJoystickBaseStatic.strokeCircle(0, 0, r + 12);
+            this.rightJoystickBaseStatic.lineStyle(1.5, 0xff6644, 0.1);
+            this.rightJoystickBaseStatic.lineBetween(-r, 0, r, 0);
+            this.rightJoystickBaseStatic.lineBetween(0, -r, 0, r);
+            this.rightJoystickBaseStatic.setPosition(W - 150, H - 150).setVisible(true);
 
-            this.rightJoystickBase=this.add.graphics().setDepth(100).setVisible(false).setScrollFactor(0);
-            this.rightJoystickBase.fillStyle(0xff6644,0.08);
-            this.rightJoystickBase.fillCircle(0,0,r);
-            this.rightJoystickBase.lineStyle(2.5,0xff6644,0.4);
-            this.rightJoystickBase.strokeCircle(0,0,r);
+            this.rightJoystickBase = this.add.graphics().setDepth(100).setVisible(false).setScrollFactor(0);
+            this.rightJoystickBase.lineStyle(3, 0xff6644, 0.5);
+            this.rightJoystickBase.strokeCircle(0, 0, r);
 
-            this.rightJoystickThumb=this.add.graphics().setDepth(101).setVisible(false).setScrollFactor(0);
-            this.rightJoystickThumb.fillStyle(0xff6644,0.55);
-            this.rightJoystickThumb.fillCircle(0,0,30);
-            this.rightJoystickThumb.lineStyle(3,0xff6644,0.8);
-            this.rightJoystickThumb.strokeCircle(0,0,30);
+            this.rightJoystickThumb = this.add.graphics().setDepth(101).setVisible(false).setScrollFactor(0);
+            this.rightJoystickThumb.fillStyle(0xff6644, 0.6);
+            this.rightJoystickThumb.fillCircle(0, 0, 28);
+            this.rightJoystickThumb.lineStyle(3, 0xff6644, 0.85);
+            this.rightJoystickThumb.strokeCircle(0, 0, 28);
 
-            // "ACTION" label
-            if (isMobile) {
-                this.rightJoystickLabel = this.add.text(GAME_CONFIG.DESIGN_WIDTH - 140, GAME_CONFIG.DESIGN_HEIGHT - 70, 'ACTION', {
-                    fontFamily: '"Segoe UI", system-ui, sans-serif', fontSize: '10px',
-                    fontStyle: 'bold', color: 'rgba(255,102,68,0.2)', letterSpacing: '3px',
-                }).setOrigin(0.5).setDepth(99).setScrollFactor(0);
-            }
+            this.rightJoystickLabel = this.add.text(W - 150, H - 78, 'DASH', {
+                fontFamily: '"Segoe UI", system-ui, sans-serif', fontSize: '11px',
+                fontStyle: 'bold', color: 'rgba(255,102,68,0.25)', letterSpacing: '3px',
+            }).setOrigin(0.5).setDepth(99).setScrollFactor(0);
+
+            // ════════════════════════════════════════════════════
+            // TOUCH HANDLERS — attached AFTER graphics exist
+            // ════════════════════════════════════════════════════
+            const halfW = W * 0.5;
+            const DZ = GAME_CONFIG.JOYSTICK_DEADZONE;
+
+            this.input.on('pointerdown', (p) => {
+                // Allow during pre-raid + active (not during result/match-over)
+                const ph = s.turnManager.phase;
+                if (ph !== GAME_PHASE.PRE_RAID && ph !== GAME_PHASE.RAID_ACTIVE) return;
+
+                if (p.x < halfW && !s.leftJoystickActive) {
+                    s.leftJoystickActive = true;
+                    s.leftJoystickPointerID = p.id;
+                    s.leftJoystickOrigin.x = p.x;
+                    s.leftJoystickOrigin.y = p.y;
+                    s.leftJoystickBase.setPosition(p.x, p.y).setVisible(true);
+                    s.leftJoystickThumb.setPosition(p.x, p.y).setVisible(true);
+                } else if (p.x >= halfW && !s.rightJoystickActive) {
+                    s.rightJoystickActive = true;
+                    s.rightJoystickPointerID = p.id;
+                    s.rightJoystickOrigin.x = p.x;
+                    s.rightJoystickOrigin.y = p.y;
+                    s.rightJoystickBase.setPosition(p.x, p.y).setVisible(true);
+                    s.rightJoystickThumb.setPosition(p.x, p.y).setVisible(true);
+                }
+            });
+
+            this.input.on('pointermove', (p) => {
+                if (s.leftJoystickActive && p.id === s.leftJoystickPointerID) {
+                    const j = s.computeJoystick(p, s.leftJoystickOrigin);
+                    s.leftJoystickThumb.setPosition(j.thumbX, j.thumbY);
+                    if (j.magnitude < DZ) { s.moveVector.x = 0; s.moveVector.y = 0; }
+                    else { s.moveVector.x = Math.cos(j.angle) * j.magnitude; s.moveVector.y = Math.sin(j.angle) * j.magnitude; }
+                }
+                if (s.rightJoystickActive && p.id === s.rightJoystickPointerID) {
+                    const j = s.computeJoystick(p, s.rightJoystickOrigin);
+                    s.rightJoystickThumb.setPosition(j.thumbX, j.thumbY);
+                    if (j.magnitude < DZ) { s.aimVector.x = 0; s.aimVector.y = 0; }
+                    else { s.aimVector.x = Math.cos(j.angle) * j.magnitude; s.aimVector.y = Math.sin(j.angle) * j.magnitude; }
+                }
+            });
+
+            const onUp = (p) => {
+                if (p.id === s.leftJoystickPointerID) {
+                    s.leftJoystickActive = false;
+                    s.leftJoystickPointerID = null;
+                    s.moveVector.x = 0; s.moveVector.y = 0;
+                    s.leftJoystickBase.setVisible(false);
+                    s.leftJoystickThumb.setVisible(false);
+                }
+                if (p.id === s.rightJoystickPointerID) {
+                    // Fire action on release (like Brawl Stars)
+                    if (Math.abs(s.aimVector.x) > 0.1 || Math.abs(s.aimVector.y) > 0.1) {
+                        s.triggerAction(s.aimVector.x, s.aimVector.y);
+                    }
+                    s.rightJoystickActive = false;
+                    s.rightJoystickPointerID = null;
+                    s.aimVector.x = 0; s.aimVector.y = 0;
+                    s.rightJoystickBase.setVisible(false);
+                    s.rightJoystickThumb.setVisible(false);
+                    if (s.aimLine) s.aimLine.clear();
+                }
+            };
+            this.input.on('pointerup', onUp);
+            this.input.on('pointerupoutside', onUp);
         }
 
         setupKeyboardInput(){
@@ -3413,7 +3422,10 @@
             this.input.keyboard.on('keydown-SPACE',()=>{if(!this.turnManager.isRaidActive)return;if(!this.ultimateSystem.tryActivate())this.triggerAction(Math.cos(this.facingAngle),Math.sin(this.facingAngle));});
             this.input.keyboard.on('keydown-E',()=>{if(!this.turnManager.isRaidActive)return;this.ultimateSystem.tryActivate();});
             this.input.keyboard.on('keydown-C',()=>{if(!this.turnManager.isRaidActive)return;this.triggerChainTackle();});
-            this.input.on('pointerdown',(p)=>{if(!this.turnManager.isRaidActive)return;if((p.button===0||p.button==null)&&!this.leftJoystickActive&&!this.rightJoystickActive){const w=this.cameras.main.getWorldPoint(p.x,p.y);const dx=w.x-this.player.x,dy=w.y-this.player.y,m=Math.sqrt(dx*dx+dy*dy);if(m>5)this.triggerAction(dx/m,dy/m);}});
+            // Click-to-dash only on desktop (no touch) — avoids conflicting with mobile joystick
+            if(!this.sys.game.device.input.touch){
+                this.input.on('pointerdown',(p)=>{if(!this.turnManager.isRaidActive)return;if((p.button===0||p.button==null)&&!this.leftJoystickActive&&!this.rightJoystickActive){const w=this.cameras.main.getWorldPoint(p.x,p.y);const dx=w.x-this.player.x,dy=w.y-this.player.y,m=Math.sqrt(dx*dx+dy*dy);if(m>5)this.triggerAction(dx/m,dy/m);}});
+            }
         }
 
         readKeyboardInput(){
