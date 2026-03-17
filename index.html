@@ -20,9 +20,23 @@
             overscroll-behavior: none; touch-action: none;
             -webkit-touch-callout: none; -webkit-user-select: none; user-select: none;
             font-family: 'Segoe UI', system-ui, sans-serif;
+            /* iOS Safari: use dynamic viewport height to account for URL bar + tab bar */
+            height: 100dvh;
+            height: -webkit-fill-available;
         }
-        #game-container { width: 100%; height: 100%; display: flex; align-items: center; justify-content: center; overflow: hidden; }
-        canvas { max-width: 100vw !important; max-height: 100vh !important; }
+        #game-container {
+            width: 100%; height: 100%;
+            height: 100dvh;
+            height: -webkit-fill-available;
+            display: flex; align-items: center; justify-content: center;
+            overflow: hidden;
+            /* Safe area padding for notch/Dynamic Island */
+            padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
+        }
+        /* Let Phaser handle canvas sizing — just prevent overflow */
+        #game-container canvas {
+            display: block;
+        }
 
         /* Portrait mode warning for mobile */
         #rotate-prompt {
@@ -50,7 +64,7 @@
         .spinner { width: 48px; height: 48px; border: 3px solid rgba(240,192,64,0.2); border-top-color: #f0c040; border-radius: 50%; animation: spin 0.8s linear infinite; margin-bottom: 1.5rem; }
         @keyframes spin { to { transform: rotate(360deg); } }
 
-        #hud-overlay { position: fixed; top: 0; left: 0; right: 0; z-index: 50; pointer-events: none; padding: 8px 12px; display: flex; justify-content: space-between; align-items: flex-start; }
+        #hud-overlay { position: fixed; top: 0; left: 0; right: 0; z-index: 50; pointer-events: none; padding: 8px 12px; padding-top: max(8px, env(safe-area-inset-top)); padding-left: max(12px, env(safe-area-inset-left)); padding-right: max(12px, env(safe-area-inset-right)); display: flex; justify-content: space-between; align-items: flex-start; }
         .hud-panel { background: rgba(10,10,18,0.65); backdrop-filter: blur(8px); border: 1px solid rgba(240,192,64,0.15); border-radius: 8px; padding: 6px 12px; color: rgba(255,255,255,0.8); font-size: 13px; }
         .hud-panel .label { font-size: 9px; text-transform: uppercase; letter-spacing: 0.1em; color: rgba(240,192,64,0.6); margin-bottom: 1px; }
         .hud-panel .value { font-size: 16px; font-weight: 700; }
@@ -4146,14 +4160,44 @@
          PHASER BOOT
          ════════════════════════════════════════════════════ -->
     <script>
+    // Force container to actual visible size before Phaser measures it
+    (function fixContainer() {
+        const c = document.getElementById('game-container');
+        c.style.width = window.innerWidth + 'px';
+        c.style.height = window.innerHeight + 'px';
+    })();
+
     const phaserConfig = {
         type: Phaser.WEBGL, parent:'game-container',
-        scale:{mode:Phaser.Scale.FIT,autoCenter:Phaser.Scale.CENTER_BOTH,width:GAME_CONFIG.DESIGN_WIDTH,height:GAME_CONFIG.DESIGN_HEIGHT,min:{width:320,height:180},max:{width:1920,height:1080}},
+        scale:{
+            mode: Phaser.Scale.FIT,
+            autoCenter: Phaser.Scale.CENTER_BOTH,
+            width: GAME_CONFIG.DESIGN_WIDTH,
+            height: GAME_CONFIG.DESIGN_HEIGHT,
+            min: { width: 320, height: 180 },
+            max: { width: 1920, height: 1080 },
+            expandParent: false,
+        },
         backgroundColor:'#0a0a12',antialias:true,
-        input:{activePointers:4,touch:{capture:true,target:document.getElementById('game-container')}},
+        input:{activePointers:4,touch:{capture:true}},
         fps:{target:60}, scene:[MenuScene, TutorialScene, MainGameScene],
     };
     const game = new Phaser.Game(phaserConfig);
+
+    // Resize handler: keep container matched to actual visible viewport
+    function onResize() {
+        const c = document.getElementById('game-container');
+        c.style.width = window.innerWidth + 'px';
+        c.style.height = window.innerHeight + 'px';
+        if (game && game.scale) game.scale.refresh();
+    }
+    window.addEventListener('resize', onResize);
+    // iOS Safari fires this when URL bar appears/disappears
+    window.visualViewport && window.visualViewport.addEventListener('resize', onResize);
+    // Delayed refresh for iOS Safari initial layout
+    setTimeout(onResize, 300);
+    setTimeout(onResize, 1000);
+
     document.addEventListener('visibilitychange',()=>{if(document.hidden)game.scene.scenes.forEach(s=>{if(s.scene.isActive())s.scene.pause();});else game.scene.scenes.forEach(s=>{if(s.scene.isPaused())s.scene.resume();});});
     window.addEventListener('contextmenu',e=>e.preventDefault());
     </script>
