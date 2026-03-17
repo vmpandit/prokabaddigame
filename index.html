@@ -30,8 +30,8 @@
             height: -webkit-fill-available;
             display: flex; align-items: center; justify-content: center;
             overflow: hidden;
-            /* Safe area padding for notch/Dynamic Island */
-            padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
+            /* No padding — Phaser Scale.FIT + CENTER_BOTH handles centering.
+               Safe-area is handled by the HUD overlay's own padding. */
         }
         /* Let Phaser handle canvas sizing — just prevent overflow */
         #game-container canvas {
@@ -64,7 +64,8 @@
         .spinner { width: 48px; height: 48px; border: 3px solid rgba(240,192,64,0.2); border-top-color: #f0c040; border-radius: 50%; animation: spin 0.8s linear infinite; margin-bottom: 1.5rem; }
         @keyframes spin { to { transform: rotate(360deg); } }
 
-        #hud-overlay { position: fixed; top: 0; left: 0; right: 0; z-index: 50; pointer-events: none; padding: 8px 12px; padding-top: max(8px, env(safe-area-inset-top)); padding-left: max(12px, env(safe-area-inset-left)); padding-right: max(12px, env(safe-area-inset-right)); display: flex; justify-content: space-between; align-items: flex-start; }
+        #hud-overlay { position: fixed; top: 0; left: 0; right: 0; z-index: 50; pointer-events: none; padding: 8px 12px; padding-top: max(8px, env(safe-area-inset-top)); padding-left: max(12px, env(safe-area-inset-left)); padding-right: max(12px, env(safe-area-inset-right)); display: none; justify-content: space-between; align-items: flex-start; }
+        body.gameplay-active #hud-overlay { display: flex; }
         .hud-panel { background: rgba(10,10,18,0.65); backdrop-filter: blur(8px); border: 1px solid rgba(240,192,64,0.15); border-radius: 8px; padding: 6px 12px; color: rgba(255,255,255,0.8); font-size: 13px; }
         .hud-panel .label { font-size: 9px; text-transform: uppercase; letter-spacing: 0.1em; color: rgba(240,192,64,0.6); margin-bottom: 1px; }
         .hud-panel .value { font-size: 16px; font-weight: 700; }
@@ -92,7 +93,8 @@
         #sound-toggle:hover { color: #f0c040; border-color: rgba(240,192,64,0.4); }
 
         /* ── Env Label (Slice 4) ── */
-        #env-label { position: fixed; bottom: 10px; left: 10px; z-index: 55; pointer-events: none; font-size: 10px; color: rgba(240,192,64,0.2); letter-spacing: 0.2em; text-transform: uppercase; }
+        #env-label { position: fixed; bottom: 10px; left: 10px; z-index: 55; pointer-events: none; font-size: 10px; color: rgba(240,192,64,0.2); letter-spacing: 0.2em; text-transform: uppercase; display: none; }
+        body.gameplay-active #env-label { display: block; }
 
         #turn-banner { position: fixed; inset: 0; z-index: 70; display: flex; flex-direction: column; align-items: center; justify-content: center; background: rgba(10,10,18,0.75); backdrop-filter: blur(6px); opacity: 0; pointer-events: none; transition: opacity 0.4s ease; }
         #turn-banner.show { opacity: 1; pointer-events: auto; }
