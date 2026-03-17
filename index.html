@@ -3281,7 +3281,9 @@
             const EDGE_MARGIN = 8; // px from screen edge to ignore touches (reduced for small screens)
 
             this.input.on('pointerdown',(p)=>{
-                if(!this.turnManager.isRaidActive) return;
+                // Allow joystick during pre-raid and raid_active (so players can start moving immediately)
+                const phase = this.turnManager.phase;
+                if(phase !== GAME_PHASE.PRE_RAID && phase !== GAME_PHASE.RAID_ACTIVE) return;
 
                 // Edge-swipe prevention: ignore touches very near screen edges (use raw screen coords)
                 const rawX = p.event ? (p.event.clientX != null ? p.event.clientX : p.x) : p.x;
@@ -3331,14 +3333,79 @@
 
         createJoystickGraphics(){
             const r=GAME_CONFIG.JOYSTICK_RADIUS;
+            const isMobile = this.sys.game.device.input.touch;
+
+            // ── LEFT JOYSTICK (movement) — Brawl Stars style ──
+            // Static base: always visible in bottom-left during gameplay
+            this.leftJoystickBaseStatic = this.add.graphics().setDepth(99).setScrollFactor(0).setVisible(false);
+            this.leftJoystickBaseStatic.fillStyle(0xffffff, 0.06);
+            this.leftJoystickBaseStatic.fillCircle(0, 0, r + 10);
+            this.leftJoystickBaseStatic.lineStyle(2, 0xffffff, 0.12);
+            this.leftJoystickBaseStatic.strokeCircle(0, 0, r + 10);
+            // Crosshair lines in base
+            this.leftJoystickBaseStatic.lineStyle(1, 0xffffff, 0.08);
+            this.leftJoystickBaseStatic.lineBetween(-r+10, 0, r-10, 0);
+            this.leftJoystickBaseStatic.lineBetween(0, -r+10, 0, r-10);
+            if (isMobile) {
+                this.leftJoystickBaseStatic.setPosition(140, GAME_CONFIG.DESIGN_HEIGHT - 140);
+                this.leftJoystickBaseStatic.setVisible(true);
+            }
+
+            // Dynamic base (appears at touch point)
             this.leftJoystickBase=this.add.graphics().setDepth(100).setVisible(false).setScrollFactor(0);
-            this.leftJoystickBase.lineStyle(2,0xffffff,0.2);this.leftJoystickBase.strokeCircle(0,0,r);this.leftJoystickBase.fillStyle(0xffffff,0.05);this.leftJoystickBase.fillCircle(0,0,r);
+            this.leftJoystickBase.fillStyle(0xffffff, 0.08);
+            this.leftJoystickBase.fillCircle(0,0,r);
+            this.leftJoystickBase.lineStyle(2.5,0xffffff,0.35);
+            this.leftJoystickBase.strokeCircle(0,0,r);
+
+            // Thumb (bright, large)
             this.leftJoystickThumb=this.add.graphics().setDepth(101).setVisible(false).setScrollFactor(0);
-            this.leftJoystickThumb.fillStyle(0xffffff,0.3);this.leftJoystickThumb.fillCircle(0,0,28);this.leftJoystickThumb.lineStyle(2,0xffffff,0.5);this.leftJoystickThumb.strokeCircle(0,0,28);
+            this.leftJoystickThumb.fillStyle(0xffffff,0.5);
+            this.leftJoystickThumb.fillCircle(0,0,32);
+            this.leftJoystickThumb.lineStyle(3,0xffffff,0.7);
+            this.leftJoystickThumb.strokeCircle(0,0,32);
+
+            // "MOVE" label under static base
+            if (isMobile) {
+                this.leftJoystickLabel = this.add.text(140, GAME_CONFIG.DESIGN_HEIGHT - 70, 'MOVE', {
+                    fontFamily: '"Segoe UI", system-ui, sans-serif', fontSize: '10px',
+                    fontStyle: 'bold', color: 'rgba(255,255,255,0.2)', letterSpacing: '3px',
+                }).setOrigin(0.5).setDepth(99).setScrollFactor(0);
+            }
+
+            // ── RIGHT JOYSTICK (aim/action) — Brawl Stars style ──
+            this.rightJoystickBaseStatic = this.add.graphics().setDepth(99).setScrollFactor(0).setVisible(false);
+            this.rightJoystickBaseStatic.fillStyle(0xff6644, 0.06);
+            this.rightJoystickBaseStatic.fillCircle(0, 0, r + 10);
+            this.rightJoystickBaseStatic.lineStyle(2, 0xff6644, 0.12);
+            this.rightJoystickBaseStatic.strokeCircle(0, 0, r + 10);
+            this.rightJoystickBaseStatic.lineStyle(1, 0xff6644, 0.08);
+            this.rightJoystickBaseStatic.lineBetween(-r+10, 0, r-10, 0);
+            this.rightJoystickBaseStatic.lineBetween(0, -r+10, 0, r-10);
+            if (isMobile) {
+                this.rightJoystickBaseStatic.setPosition(GAME_CONFIG.DESIGN_WIDTH - 140, GAME_CONFIG.DESIGN_HEIGHT - 140);
+                this.rightJoystickBaseStatic.setVisible(true);
+            }
+
             this.rightJoystickBase=this.add.graphics().setDepth(100).setVisible(false).setScrollFactor(0);
-            this.rightJoystickBase.lineStyle(2,0xff6644,0.25);this.rightJoystickBase.strokeCircle(0,0,r);this.rightJoystickBase.fillStyle(0xff6644,0.06);this.rightJoystickBase.fillCircle(0,0,r);
+            this.rightJoystickBase.fillStyle(0xff6644,0.08);
+            this.rightJoystickBase.fillCircle(0,0,r);
+            this.rightJoystickBase.lineStyle(2.5,0xff6644,0.4);
+            this.rightJoystickBase.strokeCircle(0,0,r);
+
             this.rightJoystickThumb=this.add.graphics().setDepth(101).setVisible(false).setScrollFactor(0);
-            this.rightJoystickThumb.fillStyle(0xff6644,0.35);this.rightJoystickThumb.fillCircle(0,0,26);this.rightJoystickThumb.lineStyle(2,0xff6644,0.6);this.rightJoystickThumb.strokeCircle(0,0,26);
+            this.rightJoystickThumb.fillStyle(0xff6644,0.55);
+            this.rightJoystickThumb.fillCircle(0,0,30);
+            this.rightJoystickThumb.lineStyle(3,0xff6644,0.8);
+            this.rightJoystickThumb.strokeCircle(0,0,30);
+
+            // "ACTION" label
+            if (isMobile) {
+                this.rightJoystickLabel = this.add.text(GAME_CONFIG.DESIGN_WIDTH - 140, GAME_CONFIG.DESIGN_HEIGHT - 70, 'ACTION', {
+                    fontFamily: '"Segoe UI", system-ui, sans-serif', fontSize: '10px',
+                    fontStyle: 'bold', color: 'rgba(255,102,68,0.2)', letterSpacing: '3px',
+                }).setOrigin(0.5).setDepth(99).setScrollFactor(0);
+            }
         }
 
         setupKeyboardInput(){
@@ -3363,6 +3430,11 @@
                 : isRaider
                     ? `WASD: Move | Click: Dash | Space: Dash/Ult | E: Ultimate`
                     : `WASD: Move | Click: Tackle | Space: Tackle/Ult | C: Chain | E: Ult`);
+
+            // Update mobile joystick labels
+            if (this.rightJoystickLabel) {
+                this.rightJoystickLabel.setText(isRaider ? 'DASH' : 'TACKLE');
+            }
         }
 
         // ════════════════════════════════════════════════════
@@ -3998,6 +4070,16 @@
             this.ultimateSystem.update(dt);
             if (this.comboSystem) this.comboSystem.update(dt);
             if(this.dashCooldownTimer>0) this.dashCooldownTimer-=delta;
+
+            // Show/hide mobile joystick bases based on game phase
+            if (this.leftJoystickBaseStatic) {
+                const showJoysticks = this.turnManager.phase === GAME_PHASE.PRE_RAID ||
+                                      this.turnManager.phase === GAME_PHASE.RAID_ACTIVE;
+                this.leftJoystickBaseStatic.setVisible(showJoysticks);
+                this.rightJoystickBaseStatic.setVisible(showJoysticks);
+                if (this.leftJoystickLabel) this.leftJoystickLabel.setVisible(showJoysticks);
+                if (this.rightJoystickLabel) this.rightJoystickLabel.setVisible(showJoysticks);
+            }
 
             // Slice 5: Formation rotation timer
             if (this.turnManager.isRaidActive && this.turnManager.isPlayerRaider) {
